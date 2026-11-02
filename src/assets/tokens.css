@@ -1,0 +1,52 @@
+:root {
+  /* Night of Northrend */
+  --bg-950: #03060a;
+  --bg-900: #060b12;
+  --bg-850: #09111b;
+  --bg-800: #0c1724;
+  --bg-700: #122133;
+  --line: rgba(143, 211, 255, 0.14);
+  --line-strong: rgba(143, 211, 255, 0.28);
+
+  /* Frost */
+  --ice-50: #eef8ff;
+  --ice-100: #d6efff;
+  --ice-200: #aee0ff;
+  --ice-300: #7fcbff;
+  --ice-400: #4fb3f7;
+  --ice-500: #2a93e0;
+  --ice-700: #134b78;
+  --ice-glow: rgba(95, 190, 255, 0.45);
+
+  /* Gold trim */
+  --gold-100: #fff1c9;
+  --gold-200: #f6dc98;
+  --gold-300: #e9c46a;
+  --gold-400: #d4a845;
+  --gold-500: #b8882c;
+  --gold-700: #7a5519;
+  --gold-glow: rgba(233, 196, 106, 0.35);
+
+  /* Text */
+  --text-100: #eef3f8;
+  --text-200: #c9d5e2;
+  --text-300: #9aabbd;
+  --text-400: #6e8093;
+
+  /* States */
+  --ok: #5fe0a0;
+  --warn: #f0c060;
+  --danger: #ff6b6b;
+  --planned: #a78bfa;
+
+  --font-display: 'Cinzel', 'Trajan Pro', Georgia, serif;
+  --font-deco: 'Cinzel Decorative', 'Cinzel', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 14px;
+  --container: 1200px;
+  --header-h: 72px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}

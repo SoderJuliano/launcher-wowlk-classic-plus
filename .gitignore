@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+*.log
+# Proprietary game binaries used only by manual tests — never commit
+tests/manual/realroot/
+tests/manual/*.exe
+tests/manual/*.local
+release-final/
+release-test/
+build-out/
+dist-release/

@@ -1,0 +1,21 @@
+'use strict'
+// Linux-only: real GameLauncher → Wine run of a Windows .exe placed as Wow.exe.
+const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path')
+const { makeConfig, makeZip, realisticEntries } = require('../helpers.cjs')
+const { InstallationManager } = require('../../electron/core/InstallationManager.cjs')
+const { GameLauncher } = require('../../electron/core/GameLauncher.cjs')
+const { detectWine } = require('../../electron/core/PlatformService.cjs')
+;(async () => {
+  console.log('wine detected:', JSON.stringify(await detectWine('')))
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'olk-wine-'))
+  const config = makeConfig(data)
+  const installer = new InstallationManager({ config })
+  const entries = realisticEntries().map((e) => e.name.endsWith('Wow.exe') ? { ...e, data: fs.readFileSync(path.join(__dirname, 'whoami64.exe')) } : e)
+  await makeZip(path.join(data, 'p.zip'), entries)
+  await installer.installFromZip({ id: 'wow32', zipPath: path.join(data, 'p.zip') })
+  const keep = setInterval(() => {}, 1000)
+  const t0 = Date.now()
+  const code = await new Promise((res, rej) => new GameLauncher({ config, installer }).launch('wow32', { onExit: res }).then((i) => console.log('spawned via', i.command, 'pid', i.pid)).catch(rej))
+  clearInterval(keep)
+  console.log('exit code', code, 'after', Date.now() - t0, 'ms; prefix exists:', fs.existsSync(path.join(data, 'wineprefix', 'system.reg')))
+})().catch((e) => { console.error('FAILED', e.code, e.message); process.exit(1) })

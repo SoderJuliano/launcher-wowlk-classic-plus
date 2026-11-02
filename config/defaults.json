@@ -1,0 +1,56 @@
+{
+  "$comment": "Factory defaults. Users override them in Settings; they are saved to settings.json in the app data folder. No rebuild needed.",
+  "websiteUrl": "",
+  "api": {
+    "baseUrl": "",
+    "discovery": {
+      "enabled": true,
+      "url": "https://abra-api.top/notifications/retrieve?key=ngrockurl"
+    },
+    "pathPrefix": "/launcher/v1",
+    "timeoutMs": 15000
+  },
+  "realmlist": "ru2esxz6.free.tryportwarp.cc:16943",
+  "locale": "enUS",
+  "selectedClient": "wow32",
+  "clients": {
+    "wow32": {
+      "name": "Classic Plus LK — 32-bit",
+      "architecture": "x86",
+      "executable": "Wow.exe",
+      "packageRoot": "",
+      "basePackage": {
+        "url": "https://drive.google.com/drive/folders/1SqSux4J7zJO-3y4foaxE4nviU8ggTotr?usp=sharing",
+        "size": 0,
+        "sha256": ""
+      },
+      "requiredFiles": [
+        "Wow.exe",
+        "Data/common.MPQ",
+        "Data/common-2.MPQ",
+        "Data/expansion.MPQ",
+        "Data/lichking.MPQ",
+        "Data/patch.MPQ",
+        "Data/{locale}/locale-{locale}.MPQ"
+      ],
+      "available": true
+    },
+    "wow64": {
+      "name": "Classic Plus LK — 64-bit",
+      "architecture": "x64",
+      "executable": "",
+      "packageRoot": "",
+      "basePackage": {
+        "url": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "requiredFiles": [],
+      "available": false
+    }
+  },
+  "wine": {
+    "path": "",
+    "prefix": ""
+  }
+}
