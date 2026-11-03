@@ -34,6 +34,25 @@ class GameLauncher {
     })
   }
 
+  /**
+   * SoderPad.exe turns a controller into keys for the 3.3.5a client, which cannot read one.
+   * It closes itself with the game. Optional: a failure here must never stop the game.
+   */
+  #startControllerReader(dir, command, env) {
+    const reader = path.join(dir, 'SoderPad.exe')
+    if (!fs.existsSync(reader)) return
+    try {
+      const wine = this.platform !== 'win32'
+      const proc = this.spawn(wine ? command : reader, wine ? [reader] : [], {
+        cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
+      })
+      proc.once('error', (err) => log.warn(`controller reader did not start: ${err.message}`))
+      proc.unref()
+    } catch (err) {
+      log.warn(`controller reader did not start: ${err.message}`)
+    }
+  }
+
   /** @returns {Promise<{ pid: number, command: string }>} */
   async launch(id, { onExit, onStatus } = {}) {
     if (this.running.has(id)) throw new LauncherError('ALREADY_RUNNING', 'The game is already running.')
@@ -86,6 +105,7 @@ class GameLauncher {
       onExit?.(code)
     })
     child.unref()
+    this.#startControllerReader(dir, command, env)
     return { pid: child.pid, command: path.basename(command) }
   }
 }
