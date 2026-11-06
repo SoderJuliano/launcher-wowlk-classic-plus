@@ -56,8 +56,16 @@ class ApiClient {
     const res = await this.#raw(discovery.url, { headers: { 'Cache-Control': 'no-cache' } })
     if (!res.ok) throw new LauncherError('DISCOVERY_FAILED', `Server discovery failed (${res.status}).`)
     const list = await res.json().catch(() => null)
-    const last = Array.isArray(list) ? list[list.length - 1] : null
-    const url = cleanTunnelUrl(last?.content)
+    let url = null
+    if (Array.isArray(list)) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const candidate = cleanTunnelUrl(list[i]?.content)
+        if (candidate) {
+          url = candidate
+          break
+        }
+      }
+    }
     if (!url) throw new LauncherError('DISCOVERY_FAILED', 'Server discovery returned no valid URL.')
     return url
   }
