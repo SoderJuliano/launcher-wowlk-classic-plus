@@ -60,8 +60,8 @@ function openSite() { call('openWebsite').catch(() => {}) }
       </div>
 
       <div v-if="apiState !== 'online'" class="login__skip">
-        <p class="hint">Launcher sign-in is not available right now. You can still install and play — the game itself asks for your account.</p>
-        <button type="button" class="btn btn--ghost" @click="store.skippedLogin = true">Continue without signing in</button>
+        <p class="hint">O login do launcher está conectando ou temporariamente indisponível. Você pode continuar sem entrar (o jogo pedirá sua conta).</p>
+        <button type="button" class="btn btn--ghost" @click="store.skippedLogin = true">Continuar sem entrar / Continue</button>
       </div>
     </form>
   </section>

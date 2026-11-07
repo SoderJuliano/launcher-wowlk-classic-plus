@@ -14,13 +14,15 @@ const platform = require('./PlatformService.cjs')
 const log = require('./logger.cjs')
 
 class LauncherController {
-  constructor({ config, api, auth, manifests, downloader, installer, updater, game, emit }) {
-    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, game })
+  constructor({ config, api, auth, manifests, downloader, installer, updater, game, selfUpdater, emit }) {
+    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, game, selfUpdater })
     this.emit = emit || (() => {})
     this.task = null // { id, kind, phase, done, total, file, bytesPerSec, controller }
+    this.launcherUpdate = null
     this.lastError = {} // clientId -> { code, message }
     this.manifestCache = {} // clientId -> { manifest, fetchedAt } | { error }
     this.wine = null
+    this.periodicTimer = null
   }
 
   /* ───────────── state ───────────── */
@@ -28,8 +30,25 @@ class LauncherController {
   async init() {
     this.wine = await platform.detectWine(this.config.get().wine.path)
     await this.api.health()
-    if (this.api.lastStatus.state === 'online') await this.auth.restore()
+    if (this.api.lastStatus.state === 'online') {
+      try {
+        const updateResult = await this.selfUpdater?.checkAndApplyUpdate({
+          onProgress: (p) => {
+            this.launcherUpdate = p
+            this.#publish()
+          }
+        })
+        if (updateResult?.relaunching) return
+      } catch (err) {
+        log.warn('launcher self-update check failed', toPlain(err))
+      } finally {
+        this.launcherUpdate = null
+        this.#publish()
+      }
+      await this.auth.restore()
+    }
     await this.refreshManifests()
+    this.startPeriodicCheck()
     this.#publish()
   }
 
@@ -85,6 +104,7 @@ class LauncherController {
       user: this.auth.user,
       authenticated: this.auth.isAuthenticated(),
       selectedClient: cfg.selectedClient,
+      launcherUpdate: this.launcherUpdate,
       clients: Object.keys(cfg.clients).map((id) => this.clientState(id)),
       task: this.task && { id: this.task.id, kind: this.task.kind, stage: this.task.stage, phase: this.task.phase, done: this.task.done, total: this.task.total, file: this.task.file, bytesPerSec: this.task.bytesPerSec },
       settings: {
@@ -110,6 +130,9 @@ class LauncherController {
 
   async login(creds) {
     const user = await this.auth.login(creds)
+    for (const id of Object.keys(this.config.get().clients)) {
+      if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username)
+    }
     await this.refreshManifests()
     this.#publish()
     return user
@@ -229,8 +252,14 @@ class LauncherController {
   async play(id) {
     if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
     delete this.lastError[id]
+    const state = this.clientState(id)
+    if (state.updateAvailable) {
+      log.info(`update required before play for ${id}`)
+      return this.update(id)
+    }
     try {
-      const r = await this.game.launch(id, { onExit: () => this.#publish() })
+      const credentials = { username: this.auth.user?.username, password: this.auth.password }
+      const r = await this.game.launch(id, { onExit: () => this.#publish(), credentials })
       this.#publish()
       return r
     } catch (err) {
@@ -238,6 +267,62 @@ class LauncherController {
       this.#publish()
       throw err
     }
+  }
+
+  startPeriodicCheck(intervalMs = 120_000) {
+    if (this.periodicTimer) clearInterval(this.periodicTimer)
+    this.periodicTimer = setInterval(() => {
+      this.checkPeriodicUpdates().catch((err) => log.warn('periodic check error', toPlain(err)))
+    }, intervalMs)
+    this.periodicTimer.unref?.()
+  }
+
+  stopPeriodicCheck() {
+    if (this.periodicTimer) {
+      clearInterval(this.periodicTimer)
+      this.periodicTimer = null
+    }
+  }
+
+  async checkPeriodicUpdates() {
+    if (this.task) return
+    const clientIds = Object.keys(this.config.get().clients)
+    if (clientIds.some((id) => this.game.isRunning(id))) return
+
+    if (this.api.lastStatus?.state !== 'online') {
+      try { await this.api.health() } catch { /* silent */ }
+    }
+
+    if (this.api.lastStatus?.state === 'online') {
+      try {
+        const updateResult = await this.selfUpdater?.checkAndApplyUpdate({
+          onProgress: (p) => {
+            this.launcherUpdate = p
+            this.#publish()
+          }
+        })
+        if (updateResult?.relaunching) return
+      } catch (err) {
+        log.warn('periodic launcher update check failed', toPlain(err))
+      } finally {
+        if (this.launcherUpdate) {
+          this.launcherUpdate = null
+          this.#publish()
+        }
+      }
+
+      try {
+        await this.refreshManifests()
+      } catch (err) {
+        log.warn('periodic manifest refresh failed', toPlain(err))
+      }
+    } else {
+      try {
+        await this.refreshManifests()
+      } catch { /* silent */ }
+    }
+
+    this.#publish()
   }
 
   async updateSettings(patch) {

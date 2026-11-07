@@ -105,6 +105,20 @@ class ManifestService {
     return m
   }
 
+  /**
+   * Fetches the launcher self-update manifest.
+   * Public endpoint, no auth required. Returns null if not published yet.
+   */
+  async fetchLauncherManifest() {
+    try {
+      const raw = await this.api.request('GET', '/manifest/launcher')
+      return raw
+    } catch (err) {
+      if (err.status === 404 || err.code === 'HTTP_404') return null
+      throw err
+    }
+  }
+
   async #fetchStatic(url) {
     assertSafeUrl(url)
     const ctrl = new AbortController()

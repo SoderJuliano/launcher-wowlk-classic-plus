@@ -12,6 +12,7 @@ const { DownloadManager } = require('./core/DownloadManager.cjs')
 const { InstallationManager } = require('./core/InstallationManager.cjs')
 const { UpdateManager } = require('./core/UpdateManager.cjs')
 const { GameLauncher } = require('./core/GameLauncher.cjs')
+const { LauncherSelfUpdater } = require('./core/LauncherSelfUpdater.cjs')
 const { LauncherController } = require('./core/LauncherController.cjs')
 
 // Isolated data dir for automated end-to-end runs.
@@ -37,8 +38,9 @@ function createServices() {
   const installer = new InstallationManager({ config })
   const updater = new UpdateManager({ config, installer, downloader })
   const game = new GameLauncher({ config, installer })
+  const selfUpdater = new LauncherSelfUpdater({ config, api, manifests, downloader, launcherVersion: VERSION })
   controller = new LauncherController({
-    config, api, auth, manifests, downloader, installer, updater, game,
+    config, api, auth, manifests, downloader, installer, updater, game, selfUpdater,
     emit: (channel, payload) => win?.webContents.send(`olk:${channel}`, payload)
   })
 }
@@ -133,6 +135,7 @@ function registerIpc() {
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus() } })
 app.on('window-all-closed', () => {
+  controller?.stopPeriodicCheck?.()
   controller?.cancel()
   app.quit()
 })

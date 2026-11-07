@@ -31,6 +31,7 @@ class AuthenticationService {
   }
 
   get user() { return this.session?.user ?? null }
+  get password() { return this.session?.password ?? null }
   isAuthenticated() { return !!this.session && this.session.expiresAt > this.now() }
 
   #fromResponse(r) {
@@ -59,6 +60,7 @@ class AuthenticationService {
       }
     })
     this.session = this.#fromResponse(res)
+    this.session.password = String(password)
     if (remember) this.#persist()
     else this.#forgetDisk()
     log.info(`login ok for ${this.session.user.username}`)
@@ -81,9 +83,11 @@ class AuthenticationService {
       throw new LauncherError('SESSION_EXPIRED', 'Your session expired. Please log in again.')
     }
     try {
+      const prevPassword = this.session?.password
       const res = await this.api.request('POST', '/auth/refresh', { body: { refresh_token: rt } })
       const remembered = fs.existsSync(this.file)
       this.session = this.#fromResponse({ ...res, refresh_token: res.refresh_token ?? rt })
+      if (prevPassword) this.session.password = prevPassword
       if (remembered) this.#persist()
     } catch (err) {
       if (err.status === 401 || err.code === 'INVALID_REFRESH_TOKEN' || err.code === 'SESSION_EXPIRED') {
@@ -101,8 +105,10 @@ class AuthenticationService {
     try {
       if (!this.secure.isEncryptionAvailable()) return null
       const saved = JSON.parse(this.secure.decryptString(fs.readFileSync(this.file)))
-      this.session = { accessToken: '', expiresAt: 0, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt, user: saved.user }
+      const savedPwd = saved.password || null
+      this.session = { accessToken: '', expiresAt: 0, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt, user: saved.user, password: savedPwd }
       await this.refresh()
+      if (savedPwd && this.session) this.session.password = savedPwd
       return this.session.user
     } catch (err) {
       log.warn('session restore failed', { code: err.code, message: err.message })
@@ -125,7 +131,12 @@ class AuthenticationService {
 
   #persist() {
     if (!this.session?.refreshToken || !this.secure.isEncryptionAvailable()) return
-    const payload = JSON.stringify({ refreshToken: this.session.refreshToken, refreshExpiresAt: this.session.refreshExpiresAt, user: this.session.user })
+    const payload = JSON.stringify({
+      refreshToken: this.session.refreshToken,
+      refreshExpiresAt: this.session.refreshExpiresAt,
+      user: this.session.user,
+      password: this.session.password || undefined
+    })
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     fs.writeFileSync(this.file, this.secure.encryptString(payload), { mode: 0o600 })
   }

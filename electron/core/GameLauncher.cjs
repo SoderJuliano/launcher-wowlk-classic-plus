@@ -53,13 +53,39 @@ class GameLauncher {
     }
   }
 
+  /**
+   * digita.exe types the player's password and hits Enter when the WoW login window appears.
+   * Enables seamless single sign-on from the launcher into the 3.3.5a client.
+   */
+  #startAutoLogin(dir, command, env, password) {
+    if (!password) return
+    let helper = path.join(dir, 'digita.exe')
+    if (!fs.existsSync(helper)) {
+      const bundled = path.join(__dirname, '..', 'bin', 'digita.exe')
+      if (fs.existsSync(bundled)) {
+        try { fs.copyFileSync(bundled, helper) } catch (e) { log.warn('could not copy bundled digita.exe', e.message) }
+      }
+    }
+    if (!fs.existsSync(helper)) return
+    try {
+      const wine = this.platform !== 'win32'
+      const proc = this.spawn(wine ? command : helper, wine ? [helper, password] : [password], {
+        cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
+      })
+      proc.once('error', (err) => log.warn(`autologin did not start: ${err.message}`))
+      proc.unref()
+    } catch (err) {
+      log.warn(`autologin did not start: ${err.message}`)
+    }
+  }
+
   /** @returns {Promise<{ pid: number, command: string }>} */
-  async launch(id, { onExit, onStatus } = {}) {
+  async launch(id, { onExit, onStatus, credentials } = {}) {
     if (this.running.has(id)) throw new LauncherError('ALREADY_RUNNING', 'The game is already running.')
     const client = this.config.client(id)
     const v = this.installer.verify(id)
     if (!v.installed) throw new LauncherError('NOT_INSTALLED', v.missing.length ? `Installation is incomplete (${v.missing.join(', ')}). Use Repair.` : 'The game is not installed.')
-    this.installer.ensureRealmlist(id)
+    this.installer.ensureRealmlist(id, credentials?.username)
 
     const dir = this.config.clientDir(id)
     const exe = resolveInside(dir, client.executable)
@@ -106,6 +132,7 @@ class GameLauncher {
     })
     child.unref()
     this.#startControllerReader(dir, command, env)
+    this.#startAutoLogin(dir, command, env, credentials?.password)
     return { pid: child.pid, command: path.basename(command) }
   }
 }

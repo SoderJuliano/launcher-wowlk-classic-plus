@@ -233,11 +233,11 @@ class InstallationManager {
   }
 
   /** Re-applies the realmlist (called before every launch so config changes propagate). */
-  ensureRealmlist(id) {
+  ensureRealmlist(id, accountName) {
     const cfg = this.config.get()
     const dir = this.config.clientDir(id)
     const state = this.readState(id)
-    const r = applyRealmlist(dir, cfg.realmlist, state?.locale || cfg.locale)
+    const r = applyRealmlist(dir, cfg.realmlist, state?.locale || cfg.locale, accountName)
     if (state && state.realmlist !== cfg.realmlist) this.writeState(id, { ...state, realmlist: cfg.realmlist })
     return r
   }

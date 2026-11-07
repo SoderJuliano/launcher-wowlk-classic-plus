@@ -26,7 +26,7 @@ function writeAtomic(file, content) {
   fs.renameSync(tmp, file)
 }
 
-function applyRealmlist(gameDir, realmlist, preferredLocale) {
+function applyRealmlist(gameDir, realmlist, preferredLocale, accountName) {
   if (!REALM_RE.test(realmlist || '')) throw new LauncherError('CONFIG_INVALID', `Invalid realmlist: ${realmlist}`)
   const locales = detectLocales(gameDir)
   if (!locales.length) throw new LauncherError('INSTALL_INVALID', 'No locale folder found in Data/.')
@@ -47,6 +47,11 @@ function applyRealmlist(gameDir, realmlist, preferredLocale) {
   text = /^SET realmList .*$/im.test(text) ? text.replace(/^SET realmList .*$/im, setLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${setLine}\r\n`
   const locale = locales.includes(preferredLocale) ? preferredLocale : locales[0]
   if (!/^SET locale /im.test(text)) text += `SET locale "${locale}"\r\n`
+  if (accountName) {
+    const accLine = `SET accountName "${accountName}"`
+    text = /^SET accountName .*$/im.test(text) ? text.replace(/^SET accountName .*$/im, accLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${accLine}\r\n`
+    if (!/^SET accounttype /im.test(text)) text += `SET accounttype "LK"\r\n`
+  }
   writeAtomic(cfg, text)
   written.push('WTF/Config.wtf')
   return { locale, locales, files: written }
