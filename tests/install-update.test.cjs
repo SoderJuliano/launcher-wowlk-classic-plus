@@ -29,6 +29,8 @@ test('installs the package: strips root folder, validates and configures realmli
   const cfg = fs.readFileSync(path.join(dir, 'WTF', 'Config.wtf'), 'latin1')
   assert.match(cfg, /SET realmList "ru2esxz6\.free\.tryportwarp\.cc:16943"/)
   assert.match(cfg, /SET gxApi "d3d9"/, 'other settings preserved')
+  assert.match(cfg, /SET movie "0"/, 'movie disabled to prevent freeze')
+  assert.match(cfg, /SET expansionMovie "0"/, 'expansion movie disabled')
   assert.equal((cfg.match(/realmList/g) || []).length, 1)
   const v = installer.verify('wow32')
   assert.equal(v.installed, true)

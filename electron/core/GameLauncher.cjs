@@ -99,12 +99,15 @@ class GameLauncher {
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
     try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
 
-    const bundledLogin = path.join(__dirname, '..', 'bin', 'AccountLogin.lua')
-    if (fs.existsSync(bundledLogin)) {
-      try {
-        fs.copyFileSync(bundledLogin, path.join(glueDir, 'AccountLogin.lua'))
-      } catch (err) {
-        log.warn('could not copy AccountLogin.lua to Interface/GlueXML', err.message)
+    const glueFiles = ['AccountLogin.lua', 'MovieFrame.lua', 'MovieFrame.xml']
+    for (const f of glueFiles) {
+      const src = path.join(__dirname, '..', 'bin', f)
+      if (fs.existsSync(src)) {
+        try {
+          fs.copyFileSync(src, path.join(glueDir, f))
+        } catch (err) {
+          log.warn(`could not copy ${f} to Interface/GlueXML`, err.message)
+        }
       }
     }
 

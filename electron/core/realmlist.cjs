@@ -66,13 +66,29 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
       text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
     }
   }
+  // Previne vídeos de introdução (tela preta no Wine/Steam Deck) e bypassa termos já aceitos
+  const commonOpts = [
+    ['movie', '0'],
+    ['expansionMovie', '0'],
+    ['movieSubtitle', '0'],
+    ['readTOS', '1'],
+    ['readEULA', '1'],
+    ['readTerminationWithoutNotice', '1'],
+    ['readScanning', '1'],
+    ['readContest', '1']
+  ]
+  for (const [k, v] of commonOpts) {
+    const line = `SET ${k} "${v}"`
+    const re = new RegExp(`^SET ${k} .*$`, 'im')
+    text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
+  }
+
   if (isSteamDeck()) {
     const deckOpts = [
       ['gxResolution', '1280x800'],
       ['gxWindow', '1'],
       ['gxMaximize', '1'],
-      ['gxCursor', '1'],
-      ['movie', '1']
+      ['gxCursor', '1']
     ]
     for (const [k, v] of deckOpts) {
       const line = `SET ${k} "${v}"`
@@ -82,9 +98,6 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
   } else if (process.platform === 'linux') {
     if (!/^SET gxCursor /im.test(text) || /^SET gxCursor "0"/im.test(text)) {
       text = /^SET gxCursor .*$/im.test(text) ? text.replace(/^SET gxCursor .*$/im, 'SET gxCursor "1"') : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET gxCursor "1"\r\n`
-    }
-    if (!/^SET movie /im.test(text)) {
-      text = `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET movie "1"\r\n`
     }
   }
   writeAtomic(cfg, text)
