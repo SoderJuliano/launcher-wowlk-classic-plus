@@ -1,6 +1,6 @@
 'use strict'
 const path = require('node:path')
-const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog, screen } = require('electron')
 const log = require('./core/logger.cjs')
 const { toPlain, LauncherError } = require('./core/errors.cjs')
 const { assertSafeUrl } = require('./core/pathSafety.cjs')
@@ -46,11 +46,30 @@ function createServices() {
 }
 
 function createWindow() {
+  let targetW = 1180
+  let targetH = 720
+  let minW = 860
+  let minH = 500
+
+  try {
+    const primary = screen.getPrimaryDisplay()
+    const work = primary.workAreaSize || primary.size
+    if (work && work.width && work.height) {
+      targetW = Math.min(1180, Math.max(860, work.width - 24))
+      targetH = Math.min(720, Math.max(500, work.height - 24))
+      minW = Math.min(860, work.width)
+      minH = Math.min(500, work.height)
+    }
+  } catch (err) {
+    log.warn('could not determine workAreaSize', err?.message)
+  }
+
   win = new BrowserWindow({
-    width: 1180,
-    height: 720,
-    minWidth: 980,
-    minHeight: 620,
+    width: targetW,
+    height: targetH,
+    minWidth: minW,
+    minHeight: minH,
+    center: true,
     frame: false,
     backgroundColor: '#060b12',
     show: false,
