@@ -35,10 +35,12 @@ class GameLauncher {
   }
 
   /**
-   * SoderPad.exe turns a controller into keys for the 3.3.5a client, which cannot read one.
-   * It closes itself with the game. Optional: a failure here must never stop the game.
+   * SoderPad.exe turns a controller into keys for the 3.3.5a client on Windows.
+   * On Linux / Steam Deck, Steam Input provides native controller emulation;
+   * running SoderPad under Wine causes axis conflicts, mouse locking, and vkBasalt F11 stalls.
    */
   #startControllerReader(dir, command, env) {
+    if (this.platform !== 'win32') return
     let reader = path.join(dir, 'SoderPad.exe')
     if (!fs.existsSync(reader)) {
       const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
@@ -48,8 +50,7 @@ class GameLauncher {
     }
     if (!fs.existsSync(reader)) return
     try {
-      const wine = this.platform !== 'win32'
-      const proc = this.spawn(wine ? command : reader, wine ? [reader] : [], {
+      const proc = this.spawn(reader, [], {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`controller reader did not start: ${err.message}`))
@@ -144,6 +145,13 @@ class GameLauncher {
       onExit?.(code)
     })
     child.unref()
+    if (this.platform !== 'win32') {
+      try { this.spawn('pkill', ['-9', '-f', 'SoderPad.exe'], { stdio: 'ignore' }) } catch {}
+      const stalePad = path.join(dir, 'SoderPad.exe')
+      if (fs.existsSync(stalePad)) {
+        try { fs.unlinkSync(stalePad) } catch {}
+      }
+    }
     this.#startControllerReader(dir, command, env)
     this.#startAutoLogin(dir, command, env, credentials?.password)
     return { pid: child.pid, command: path.basename(command) }
