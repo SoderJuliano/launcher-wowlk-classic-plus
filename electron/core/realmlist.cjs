@@ -86,9 +86,10 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
   if (isSteamDeck()) {
     const deckOpts = [
       ['gxResolution', '1280x800'],
-      ['gxWindow', '1'],
-      ['gxMaximize', '1'],
-      ['gxCursor', '1']
+      ['gxWindow', '0'],
+      ['gxMaximize', '0'],
+      ['gxCursor', '1'],
+      ['gxMultisample', '0']
     ]
     for (const [k, v] of deckOpts) {
       const line = `SET ${k} "${v}"`

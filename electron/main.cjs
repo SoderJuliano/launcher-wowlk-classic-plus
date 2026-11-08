@@ -55,11 +55,11 @@ function createWindow() {
     const primary = screen.getPrimaryDisplay()
     const work = primary.workAreaSize || primary.size
     if (work && work.width && work.height) {
-      // On compact displays or Steam Deck (800p), fit comfortably within the work area
-      const maxAllowedH = work.height <= 850 ? Math.min(700, work.height - 30) : 720
-      const maxAllowedW = work.width <= 1300 ? Math.min(1100, work.width - 30) : 1180
+      // In SteamOS Desktop Mode (800p) or compact displays, keep height well clear of the taskbar
+      const maxAllowedH = work.height <= 850 ? Math.min(600, work.height - 50) : 720
+      const maxAllowedW = work.width <= 1300 ? Math.min(1080, work.width - 40) : 1180
       targetW = Math.max(860, maxAllowedW)
-      targetH = Math.max(500, maxAllowedH)
+      targetH = Math.max(480, maxAllowedH)
       minW = Math.min(840, work.width)
       minH = Math.min(480, work.height)
     }

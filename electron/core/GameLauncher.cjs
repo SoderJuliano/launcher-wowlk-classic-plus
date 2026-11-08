@@ -135,16 +135,21 @@ class GameLauncher {
       try {
         const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
         const d3d9Current = path.join(dir, 'd3d9.dll')
-        if (fs.existsSync(d3d9Orig) && fs.existsSync(d3d9Current)) {
+        if (fs.existsSync(d3d9Current)) {
           const curSize = fs.statSync(d3d9Current).size
-          const origSize = fs.statSync(d3d9Orig).size
-          if (curSize < 100000 && origSize > 500000) {
-            fs.copyFileSync(d3d9Orig, d3d9Current)
-            log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
+          if (curSize < 100000) {
+            // É a ponte.c (17 KB): trava no loader do Wine ao chamar CreateThread dentro de DllMain
+            if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
+              fs.copyFileSync(d3d9Orig, d3d9Current)
+              log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
+            } else {
+              fs.unlinkSync(d3d9Current)
+              log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
+            }
           }
         }
       } catch (e) {
-        log.warn('could not swap d3d9 proxy with DXVK', e.message)
+        log.warn('could not sanitize d3d9 proxy', e.message)
       }
 
       try {
@@ -157,6 +162,12 @@ class GameLauncher {
           }
         }
       } catch {}
+
+      // Se /opt/reshade não existir (como no Steam Deck), desativa vkBasalt para evitar crash/tela preta no Vulkan
+      if (!fs.existsSync('/opt/reshade/shaders')) {
+        env.ENABLE_VKBASALT = '0'
+        env.VKBASALT_CONFIG_FILE = '/dev/null'
+      }
     }
 
     const exe = resolveInside(dir, client.executable)
@@ -178,7 +189,10 @@ class GameLauncher {
       const wineRootDir = path.dirname(wineBinDir)
       const wineLibDir = path.join(wineRootDir, 'lib')
       env.PATH = `${wineBinDir}:${env.PATH || ''}`
-      env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
+      // Nunca prependa /usr/lib em LD_LIBRARY_PATH (no Arch/SteamOS é 64-bit e quebra loaders 32-bit de Vulkan/Mesa)
+      if (!wine.path.startsWith('/usr/bin/')) {
+        env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
+      }
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)

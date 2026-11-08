@@ -56,38 +56,29 @@ function AccountLogin_OnShow(self)
 	AccountLoginAccountEdit:SetText(accountName);
 	AccountLoginPasswordEdit:SetText("");
 
-	-- AUTO-LOGIN DIRETO DO LAUNCHER via OnUpdate com retentativa segura
+	-- AUTO-LOGIN DIRETO DO LAUNCHER via Frame dedicado (não bloqueia UI nem sequestra scripts)
 	if ( accountName ~= "" and accountList ~= "" and strsub(accountList, 1, 10) == "AUTOLOGIN:" and not self.autoLoginAttempted ) then
 		self.autoLoginAttempted = true;
 		local pass = strsub(accountList, 11);
-		self.autoLoginPass = pass;
-		self.autoLoginTimer = 0.4;
-		self.autoLoginTries = 0;
-		self:SetScript("OnUpdate", function(frame, elapsed)
-			if ( not frame.autoLoginTimer ) then return; end
-			frame.autoLoginTimer = frame.autoLoginTimer - elapsed;
-			if ( frame.autoLoginTimer <= 0 ) then
+		AccountLoginAccountEdit:SetText(accountName);
+		AccountLoginPasswordEdit:SetText(pass);
+		
+		if not AutoLoginTimerFrame then
+			AutoLoginTimerFrame = CreateFrame("Frame", "AutoLoginTimerFrame", GlueParent);
+		end
+		AutoLoginTimerFrame.timer = 0.5;
+		AutoLoginTimerFrame:SetScript("OnUpdate", function(f, elapsed)
+			f.timer = f.timer - elapsed;
+			if ( f.timer <= 0 ) then
+				f:SetScript("OnUpdate", nil);
 				if ( not EULAAccepted() ) then AcceptEULA(); end
 				if ( not TOSAccepted() ) then AcceptTOS(); end
 				if ( not TerminationWithoutNoticeAccepted() ) then AcceptTerminationWithoutNotice(); end
 				if ( not ScanningAccepted() ) then AcceptScanning(); end
 				if ( not ContestAccepted() ) then AcceptContest(); end
-				AccountLoginAccountEdit:SetText(accountName);
-				AccountLoginPasswordEdit:SetText(frame.autoLoginPass);
-				PlaySound("gsLogin");
-				DefaultServerLogin(accountName, frame.autoLoginPass);
-				frame.autoLoginTries = frame.autoLoginTries + 1;
-				if ( (GlueDialog and GlueDialog:IsShown()) or frame.autoLoginTries >= 10 ) then
-					frame.autoLoginTimer = nil;
-					frame:SetScript("OnUpdate", nil);
-					SetSavedAccountList("");
-					AccountLoginPasswordEdit:SetText("");
-				else
-					frame.autoLoginTimer = 0.3;
-				end
+				AccountLogin_Login();
 			end
 		end);
-		return;
 	end
 
 	PlayGlueMusic(CurrentGlueMusic);
