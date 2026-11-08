@@ -95,8 +95,10 @@ class GameLauncher {
     this.installer.ensureRealmlist(id, credentials?.username, credentials?.password)
 
     const dir = this.config.clientDir(id)
+    const dataDir = path.join(dir, 'Data')
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
-    fs.mkdirSync(glueDir, { recursive: true })
+    try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
+
     const bundledLogin = path.join(__dirname, '..', 'bin', 'AccountLogin.lua')
     if (fs.existsSync(bundledLogin)) {
       try {
@@ -106,10 +108,58 @@ class GameLauncher {
       }
     }
 
+    // Garante que o patch-Z.MPQ de auto-login e stubs de Cinematics seja injetado em Data/ e Data/<locale>/
+    const bundledMpq = path.join(__dirname, '..', 'bin', 'patch-Z.MPQ')
+    if (fs.existsSync(bundledMpq)) {
+      try {
+        fs.mkdirSync(dataDir, { recursive: true })
+        fs.copyFileSync(bundledMpq, path.join(dataDir, 'patch-Z.MPQ'))
+      } catch (e) {
+        log.warn('could not copy patch-Z.MPQ to Data', e.message)
+      }
+      for (const loc of ['enUS', 'esES', 'ptBR', 'deDE', 'frFR', 'ruRU']) {
+        const locDir = path.join(dataDir, loc)
+        if (fs.existsSync(locDir)) {
+          try {
+            fs.copyFileSync(bundledMpq, path.join(locDir, `patch-${loc}-Z.MPQ`))
+          } catch {}
+        }
+      }
+    }
+
+    // No Linux / Steam Deck: elimina ponte.c proxy que trava o loader do Wine e sequestra mouse
+    if (this.platform !== 'win32') {
+      try {
+        const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
+        const d3d9Current = path.join(dir, 'd3d9.dll')
+        if (fs.existsSync(d3d9Orig) && fs.existsSync(d3d9Current)) {
+          const curSize = fs.statSync(d3d9Current).size
+          const origSize = fs.statSync(d3d9Orig).size
+          if (curSize < 100000 && origSize > 500000) {
+            fs.copyFileSync(d3d9Orig, d3d9Current)
+            log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
+          }
+        }
+      } catch (e) {
+        log.warn('could not swap d3d9 proxy with DXVK', e.message)
+      }
+
+      try {
+        const dxvkConf = path.join(dir, 'dxvk.conf')
+        if (fs.existsSync(dxvkConf)) {
+          let conf = fs.readFileSync(dxvkConf, 'utf8')
+          if (conf.includes('d3d9.deferSurfaceCreation = True')) {
+            conf = conf.replace('d3d9.deferSurfaceCreation = True', 'd3d9.deferSurfaceCreation = False')
+            fs.writeFileSync(dxvkConf, conf)
+          }
+        }
+      } catch {}
+    }
+
     const exe = resolveInside(dir, client.executable)
     let command = exe
     let args = []
-    const env = { ...process.env }
+    const env = platform.cleanEnvForSystemBinary ? platform.cleanEnvForSystemBinary({ ...process.env }) : { ...process.env }
 
     if (this.platform !== 'win32') {
       const cfg = this.config.get()

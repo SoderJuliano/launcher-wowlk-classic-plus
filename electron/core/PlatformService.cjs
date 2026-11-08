@@ -23,9 +23,35 @@ function which(cmd) {
   return null
 }
 
+function cleanEnvForSystemBinary(baseEnv = process.env) {
+  const env = { ...baseEnv }
+  const appDir = process.env.APPDIR
+  if (appDir) {
+    if (env.LD_LIBRARY_PATH) {
+      env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
+        .split(':')
+        .filter((p) => p && !p.startsWith(appDir) && !p.includes('.mount_'))
+        .join(':')
+    }
+    if (env.PATH) {
+      env.PATH = env.PATH
+        .split(':')
+        .filter((p) => p && !p.startsWith(appDir) && !p.includes('.mount_'))
+        .join(':')
+    }
+  }
+  return env
+}
+
 function wineVersion(winePath) {
+  if (!winePath) return Promise.resolve(null)
   return new Promise((resolve) => {
-    execFile(winePath, ['--version'], { timeout: 8000 }, (err, stdout) => resolve(err ? null : String(stdout).trim()))
+    const env = cleanEnvForSystemBinary({ ...process.env, WINEDEBUG: '-all' })
+    execFile(winePath, ['--version'], { env, timeout: 8000 }, (err, stdout, stderr) => {
+      const out = (stdout || stderr || '').trim()
+      if (out && /wine|proton/i.test(out)) return resolve(out.split('\n')[0])
+      resolve(err ? null : (out || 'wine'))
+    })
   })
 }
 
@@ -36,7 +62,9 @@ function findSteamProtonWineCandidates() {
     path.join(home, '.local/share/Steam'),
     path.join(home, '.steam/steam'),
     path.join(home, '.steam/root'),
-    path.join(home, '.var/app/com.valvesoftware.Steam/data/Steam')
+    path.join(home, '.var/app/com.valvesoftware.Steam/data/Steam'),
+    '/home/deck/.local/share/Steam',
+    '/home/deck/.steam/steam'
   ]
   const found = []
   for (const root of steamRoots) {
@@ -59,6 +87,64 @@ function findSteamProtonWineCandidates() {
   return found
 }
 
+function findThirdPartyWineCandidates() {
+  const home = process.env.HOME || ''
+  if (!home) return []
+  const runnerDirs = [
+    path.join(home, '.var/app/com.usebottles.bottles/data/bottles/runners'),
+    path.join(home, '.local/share/lutris/runners/wine'),
+    path.join(home, '.config/heroic/tools/wine'),
+    path.join(home, '.config/heroic/tools/proton')
+  ]
+  const found = []
+  for (const base of runnerDirs) {
+    try {
+      if (!fs.existsSync(base)) continue
+      for (const dir of fs.readdirSync(base)) {
+        for (const rel of ['bin/wine', 'files/bin/wine', 'dist/bin/wine']) {
+          const w = path.join(base, dir, rel)
+          try {
+            if (fs.existsSync(w) && fs.statSync(w).isFile()) found.push(w)
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+  return found
+}
+
+async function detectAllWineCandidates(configuredPath = '', extraCandidates = []) {
+  if (platform === 'win32') return []
+  const extra = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
+  const standardPaths = [
+    configuredPath,
+    ...extra,
+    which('wine'),
+    which('wine64'),
+    '/usr/bin/wine',
+    '/usr/bin/wine64',
+    '/usr/local/bin/wine',
+    '/opt/wine-staging/bin/wine',
+    '/opt/wine/bin/wine',
+    ...findSteamProtonWineCandidates(),
+    ...findThirdPartyWineCandidates()
+  ].filter(Boolean)
+
+  const unique = [...new Set(standardPaths)]
+  const results = []
+  for (const p of unique) {
+    try {
+      if (fs.existsSync(p)) {
+        const ver = await wineVersion(p)
+        if (ver) {
+          results.push({ path: p, version: ver, isProton: /proton/i.test(p) })
+        }
+      }
+    } catch {}
+  }
+  return results
+}
+
 /** Returns { needed, found, path, version, isInternal, isProton } — Wine is only needed off Windows. */
 async function detectWine(configuredPath, plat = platform, extraCandidates = []) {
   if (plat === 'win32') return { needed: false, found: true, path: null, version: null }
@@ -69,9 +155,12 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
     which('wine'),
     which('wine64'),
     '/usr/bin/wine',
+    '/usr/bin/wine64',
     '/usr/local/bin/wine',
     '/opt/wine-staging/bin/wine',
-    ...findSteamProtonWineCandidates()
+    '/opt/wine/bin/wine',
+    ...findSteamProtonWineCandidates(),
+    ...findThirdPartyWineCandidates()
   ].filter(Boolean)
   for (const c of candidates) {
     const version = await wineVersion(c)
@@ -96,4 +185,4 @@ function describe() {
   return { platform, arch: process.arch, label: { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }[platform] || platform }
 }
 
-module.exports = { platform, which, detectWine, freeBytes, describe }
+module.exports = { platform, which, detectWine, detectAllWineCandidates, cleanEnvForSystemBinary, freeBytes, describe }

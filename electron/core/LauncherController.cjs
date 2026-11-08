@@ -422,6 +422,25 @@ class LauncherController {
     return this.snapshot()
   }
 
+  async detectWineCandidates() {
+    return platform.detectAllWineCandidates(this.config.get().wine?.path, [this.internalWinePath()])
+  }
+
+  async resetWinePrefix() {
+    const cfg = this.config.get()
+    const prefix = cfg.wine?.prefix || path.join(this.config.dataDir, 'wineprefix')
+    if (fs.existsSync(prefix)) {
+      try {
+        fs.rmSync(prefix, { recursive: true, force: true })
+        log.info('Wineprefix reset successfully:', prefix)
+        return { success: true, path: prefix }
+      } catch (err) {
+        throw new LauncherError('RESET_FAILED', `Failed to reset wineprefix: ${err.message}`)
+      }
+    }
+    return { success: true, path: prefix }
+  }
+
   clearError(id) { delete this.lastError[id]; this.#publish() }
 }
 

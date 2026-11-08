@@ -19,7 +19,8 @@ const P = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
   chip: '<rect x="6" y="6" width="12" height="12" rx="1.5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
-  log: '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>'
+  log: '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>',
+  back: '<path d="m15 18-6-6 6-6"/>'
 }
 </script>
 

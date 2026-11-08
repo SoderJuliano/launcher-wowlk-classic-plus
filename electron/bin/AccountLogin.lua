@@ -1,3 +1,10 @@
+-- Stubs defensivos para CinematicsFrame legado (evita dialog de erro Lua caso CinematicsFrame.xml seja carregado)
+if not CinematicsFrame_OnLoad then function CinematicsFrame_OnLoad(self) end end
+if not CinematicsFrame_OnShow then function CinematicsFrame_OnShow(self) end end
+if not CinematicsFrame_OnKeyDown then function CinematicsFrame_OnKeyDown(key) end end
+if not CinematicsFrameCloseDialogResumeButton_OnClick then function CinematicsFrameCloseDialogResumeButton_OnClick() end end
+if not CinematicsFrameCloseDialogLeaveButton_OnClick then function CinematicsFrameCloseDialogLeaveButton_OnClick() end end
+
 FADE_IN_TIME = 2;
 DEFAULT_TOOLTIP_COLOR = {0.8, 0.8, 0.8, 0.09, 0.09, 0.09};
 MAX_PIN_LENGTH = 10;
@@ -44,18 +51,37 @@ function AccountLogin_OnShow(self)
 	AccountLoginAccountEdit:SetText(accountName);
 	AccountLoginPasswordEdit:SetText("");
 
-	-- AUTO-LOGIN DIRETO DO LAUNCHER (handshake e conexao imediata sem parar no login)
-	if ( accountName ~= "" and accountList ~= "" and strsub(accountList, 1, 10) == "AUTOLOGIN:" and not AccountLogin.autoLoginAttempted ) then
-		AccountLogin.autoLoginAttempted = true;
-		if ( not EULAAccepted() ) then AcceptEULA(); end
-		if ( not TOSAccepted() ) then AcceptTOS(); end
-		if ( not TerminationWithoutNoticeAccepted() ) then AcceptTerminationWithoutNotice(); end
-		if ( not ScanningAccepted() ) then AcceptScanning(); end
-		if ( not ContestAccepted() ) then AcceptContest(); end
+	-- AUTO-LOGIN DIRETO DO LAUNCHER via OnUpdate com retentativa segura
+	if ( accountName ~= "" and accountList ~= "" and strsub(accountList, 1, 10) == "AUTOLOGIN:" and not self.autoLoginAttempted ) then
+		self.autoLoginAttempted = true;
 		local pass = strsub(accountList, 11);
-		SetSavedAccountList("");
-		PlaySound("gsLogin");
-		DefaultServerLogin(accountName, pass);
+		self.autoLoginPass = pass;
+		self.autoLoginTimer = 0.4;
+		self.autoLoginTries = 0;
+		self:SetScript("OnUpdate", function(frame, elapsed)
+			if ( not frame.autoLoginTimer ) then return; end
+			frame.autoLoginTimer = frame.autoLoginTimer - elapsed;
+			if ( frame.autoLoginTimer <= 0 ) then
+				if ( not EULAAccepted() ) then AcceptEULA(); end
+				if ( not TOSAccepted() ) then AcceptTOS(); end
+				if ( not TerminationWithoutNoticeAccepted() ) then AcceptTerminationWithoutNotice(); end
+				if ( not ScanningAccepted() ) then AcceptScanning(); end
+				if ( not ContestAccepted() ) then AcceptContest(); end
+				AccountLoginAccountEdit:SetText(accountName);
+				AccountLoginPasswordEdit:SetText(frame.autoLoginPass);
+				PlaySound("gsLogin");
+				DefaultServerLogin(accountName, frame.autoLoginPass);
+				frame.autoLoginTries = frame.autoLoginTries + 1;
+				if ( (GlueDialog and GlueDialog:IsShown()) or frame.autoLoginTries >= 10 ) then
+					frame.autoLoginTimer = nil;
+					frame:SetScript("OnUpdate", nil);
+					SetSavedAccountList("");
+					AccountLoginPasswordEdit:SetText("");
+				else
+					frame.autoLoginTimer = 0.3;
+				end
+			end
+		end);
 		return;
 	end
 

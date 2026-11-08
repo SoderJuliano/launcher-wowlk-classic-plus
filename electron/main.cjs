@@ -118,6 +118,8 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', (id) => controller.play(String(id)))
   handle('installWine', () => controller.installWine())
+  handle('detectWineCandidates', () => controller.detectWineCandidates())
+  handle('resetWinePrefix', () => controller.resetWinePrefix())
   handle('clearError', (id) => controller.clearError(String(id)))
   handle('saveSettings', (patch) => controller.updateSettings(patch))
   handle('openGameFolder', async (id) => {
