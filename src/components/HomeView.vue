@@ -10,7 +10,12 @@ const snap = computed(() => store.snap)
 const client = computed(() => snap.value.clients.find((c) => c.id === snap.value.selectedClient) || snap.value.clients[0])
 const busy = computed(() => !!snap.value.task)
 const p = computed(() => (store.progress && store.progress.id === client.value.id ? store.progress : null))
-const pct = computed(() => (p.value?.total ? Math.min(100, (p.value.done / p.value.total) * 100) : 0))
+const pct = computed(() => {
+  if (snap.value.task?.kind === 'wine' && snap.value.task.total) {
+    return Math.min(100, (snap.value.task.done / snap.value.task.total) * 100)
+  }
+  return p.value?.total ? Math.min(100, (p.value.done / p.value.total) * 100) : 0
+})
 
 const BUTTON = {
   INSTALL: { label: 'Install', icon: 'download' },
@@ -30,6 +35,11 @@ const btn = computed(() => BUTTON[client.value.button] || BUTTON.INSTALL)
 const STAGE_TEXT = { download: 'Downloading game package', extract: 'Installing files', verify: 'Verifying files', update: 'Downloading updates', starting: 'Preparing' }
 const statusLine = computed(() => {
   const c = client.value
+  if (snap.value.task?.kind === 'wine') {
+    const t = snap.value.task
+    if (t.stage === 'extract') return 'Instalando Wine Runner (extraindo arquivos)…'
+    return `Baixando Wine Runner — ${fmtBytes(t.done)} de ${fmtBytes(t.total)}${t.bytesPerSec ? ` · ${fmtBytes(t.bytesPerSec)}/s` : ''}`
+  }
   if (p.value) {
     const base = STAGE_TEXT[p.value.stage] || 'Working'
     if (p.value.stage === 'verify') return `${base} — ${p.value.done} / ${p.value.total}`
@@ -71,6 +81,15 @@ async function locate() {
     const r = await call('locate', client.value.id)
     if (r) toast('Game found and ready to play.', 'info')
   } catch (e) { toast(e.message) }
+}
+async function installWine() {
+  try {
+    toast('Iniciando download do Wine Runner…', 'info')
+    await call('installWine')
+    toast('Wine Runner instalado e configurado com sucesso!', 'info')
+  } catch (e) {
+    if (e.code !== 'CANCELLED') toast(`Falha ao instalar Wine: ${e.message}`)
+  }
 }
 const logout = () => run('logout').then(() => (store.skippedLogin = false))
 const ARCH = { x86: '32-bit', x64: '64-bit' }
@@ -121,9 +140,20 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
           <div><dt>Realm</dt><dd>{{ snap.settings.realmlist }}</dd></div>
           <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
         </dl>
-        <p v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn">
-          <Icon name="alert" :size="14" /> Wine is required to run the game on {{ snap.platform.label }}. Install it with your package manager (e.g. <code>sudo pacman -S wine</code> or <code>sudo apt install wine</code>) or set its path in Settings.
-        </p>
+        <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
+          <Icon name="alert" :size="16" />
+          <div class="wine-alert__content">
+            <p><strong>Compatibilidade Linux / Steam Deck:</strong> O Wine é necessário para executar o jogo.</p>
+            <button
+              type="button" class="btn btn--wine" :disabled="busy"
+              @click="installWine"
+            >
+              <span v-if="busy && snap.task?.kind === 'wine'" class="spinner" />
+              <Icon v-else name="download" :size="14" />
+              {{ busy && snap.task?.kind === 'wine' ? 'Instalando Wine Runner…' : 'Instalar Wine Runner Automático (~110 MB)' }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <footer class="bar panel">
@@ -196,6 +226,11 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .hero__facts dd { margin: 0; font-size: .84rem; color: var(--text-100); }
 .hero__warn { margin-top: 16px; max-width: 560px; }
 .hero__warn code { color: var(--gold-200); }
+.wine-alert { display: flex; align-items: flex-start; gap: 12px; }
+.wine-alert__content { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.wine-alert__content p { margin: 0; font-size: .82rem; line-height: 1.4; }
+.btn--wine { align-self: flex-start; height: 32px; padding: 0 14px; font-size: .72rem; background: var(--gold-400); color: #1a1005; font-weight: 700; border-radius: 4px; border: 1px solid var(--gold-200); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn--wine:hover:not(:disabled) { filter: brightness(1.15); }
 
 .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; align-items: center; padding: 16px 20px; }
 .bar__info { min-width: 0; display: grid; gap: 8px; }

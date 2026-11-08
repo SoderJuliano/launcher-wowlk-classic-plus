@@ -95,6 +95,7 @@ function registerIpc() {
   handle('repair', (id) => controller.update(String(id), { repair: true }))
   handle('cancel', () => controller.cancel())
   handle('play', (id) => controller.play(String(id)))
+  handle('installWine', () => controller.installWine())
   handle('clearError', (id) => controller.clearError(String(id)))
   handle('saveSettings', (patch) => controller.updateSettings(patch))
   handle('openGameFolder', async (id) => {

@@ -27,8 +27,12 @@ class LauncherController {
 
   /* ───────────── state ───────────── */
 
+  internalWinePath() {
+    return path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
+  }
+
   async init() {
-    this.wine = await platform.detectWine(this.config.get().wine.path)
+    this.wine = await platform.detectWine(this.config.get().wine.path, platform.platform, [this.internalWinePath()])
     await this.api.health()
     if (this.api.lastStatus.state === 'online') {
       try {
@@ -257,6 +261,10 @@ class LauncherController {
       log.info(`update required before play for ${id}`)
       return this.update(id)
     }
+    if (platform.platform !== 'win32' && (!this.wine || !this.wine.found)) {
+      log.info(`Wine missing on ${platform.platform}; auto-installing wine runtime fallback before launching...`)
+      await this.installWine()
+    }
     try {
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
       const r = await this.game.launch(id, { onExit: () => this.#publish(), credentials })
@@ -267,6 +275,80 @@ class LauncherController {
       this.#publish()
       throw err
     }
+  }
+
+  async installWine() {
+    if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
+    const runtimeUrl = 'https://pub-aca87790200a4237af40519010e23d8c.r2.dev/runtimes/wine-runner-linux-x64.tar.xz'
+    const runtimeSize = 114355232
+    const runtimeSha256 = '0a6c7c6947b26071ab06fc4025e33efb71afbd4809438e821d149a0a6f30b540'
+
+    const tempDir = path.join(this.config.dataDir, 'temp')
+    fs.mkdirSync(tempDir, { recursive: true })
+    const archiveDest = path.join(tempDir, 'wine-runner.tar.xz')
+    const targetDir = path.join(this.config.dataDir, 'runtime', 'wine')
+
+    const ctrl = new AbortController()
+    this.task = {
+      id: 'wine',
+      kind: 'wine',
+      stage: 'download',
+      phase: 'downloading',
+      done: 0,
+      total: runtimeSize,
+      file: 'Wine Runner (Linux / Steam Deck)',
+      controller: ctrl
+    }
+    this.#publish()
+
+    try {
+      await this.downloader.download({
+        url: runtimeUrl,
+        dest: archiveDest,
+        size: runtimeSize,
+        sha256: runtimeSha256,
+        signal: ctrl.signal,
+        onProgress: (p) => {
+          if (this.task) {
+            this.task.done = p.received || p.done || 0
+            this.task.total = p.total || runtimeSize
+            this.task.bytesPerSec = p.bytesPerSec
+            this.#publish()
+          }
+        }
+      })
+
+      if (this.task) {
+        this.task.stage = 'extract'
+        this.task.phase = 'extracting'
+        this.#publish()
+      }
+
+      fs.mkdirSync(targetDir, { recursive: true })
+      await new Promise((resolve, reject) => {
+        const { spawn } = require('node:child_process')
+        const proc = spawn('tar', ['-xJf', archiveDest, '-C', targetDir], { stdio: ['ignore', 'pipe', 'pipe'] })
+        let stderr = ''
+        proc.stderr?.on('data', (d) => { stderr += d })
+        proc.on('error', reject)
+        proc.on('close', (code) => {
+          if (code === 0) resolve()
+          else reject(new Error(`tar extraction failed with code ${code}: ${stderr}`))
+        })
+      })
+
+      try { fs.unlinkSync(archiveDest) } catch { /* ignore */ }
+
+      this.wine = await platform.detectWine(this.config.get().wine.path, platform.platform, [this.internalWinePath()])
+      log.info('internal wine runtime installed successfully', this.wine)
+    } catch (err) {
+      log.error('failed to install wine runtime', toPlain(err))
+      throw err
+    } finally {
+      this.task = null
+      this.#publish()
+    }
+    return this.wine
   }
 
   startPeriodicCheck(intervalMs = 120_000) {
@@ -333,7 +415,7 @@ class LauncherController {
       this.api.baseUrl = null
       await this.api.health()
     }
-    if (patch['wine.path'] !== undefined) this.wine = await platform.detectWine(after.wine.path)
+    if (patch['wine.path'] !== undefined) this.wine = await platform.detectWine(after.wine.path, platform.platform, [this.internalWinePath()])
     // Push a new realmlist into installed clients right away.
     if (patch.realmlist) for (const id of Object.keys(after.clients)) if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id)
     this.#publish()

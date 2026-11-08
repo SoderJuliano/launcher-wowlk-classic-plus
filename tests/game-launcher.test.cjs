@@ -62,6 +62,25 @@ test('Linux path: requires Wine and runs the exe through it with a dedicated pre
   assert.match(calls[0].opts.env.WINEDLLOVERRIDES, /d3d9/)
 })
 
+test('Linux path: uses internal wine runner fallback when available', async () => {
+  const { config, installer, dir } = await installedClient()
+  config.update({ 'wine.path': '' })
+  const internalWineDir = path.join(config.dataDir, 'runtime', 'wine', 'bin')
+  fs.mkdirSync(internalWineDir, { recursive: true })
+  const mockWine = path.join(internalWineDir, 'wine')
+  // Copy current node executable to stand in for internal wine binary
+  fs.copyFileSync(process.execPath, mockWine)
+  fs.chmodSync(mockWine, 0o755)
+
+  const calls = []
+  const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' }) }
+  fs.mkdirSync(path.join(config.dataDir, 'wineprefix', 'drive_c'), { recursive: true })
+  const launcher = new GameLauncher({ config, installer, spawnImpl, platformName: 'linux' })
+  await launcher.launch('wow32')
+  assert.equal(calls[0].cmd, mockWine)
+  assert.ok(calls[0].opts.env.PATH.includes(internalWineDir))
+})
+
 test('real process start on this OS (copy of a system binary as Wow.exe)', { skip: process.platform !== 'win32' && 'Windows-only smoke test' }, async () => {
   const { config, installer, dir } = await installedClient()
   fs.copyFileSync(path.join(process.env.SystemRoot, 'System32', 'whoami.exe'), path.join(dir, 'Wow.exe'))

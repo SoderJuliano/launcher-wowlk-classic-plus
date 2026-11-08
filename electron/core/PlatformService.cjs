@@ -29,13 +29,57 @@ function wineVersion(winePath) {
   })
 }
 
-/** Returns { needed, found, path, version } — Wine is only needed off Windows. */
-async function detectWine(configuredPath, plat = platform) {
+function findSteamProtonWineCandidates() {
+  const home = process.env.HOME || ''
+  if (!home) return []
+  const steamRoots = [
+    path.join(home, '.local/share/Steam'),
+    path.join(home, '.steam/steam'),
+    path.join(home, '.steam/root'),
+    path.join(home, '.var/app/com.valvesoftware.Steam/data/Steam')
+  ]
+  const found = []
+  for (const root of steamRoots) {
+    for (const sub of ['steamapps/common', 'compatibilitytools.d']) {
+      const p = path.join(root, sub)
+      try {
+        if (!fs.existsSync(p)) continue
+        for (const dir of fs.readdirSync(p)) {
+          if (!/proton|wine/i.test(dir)) continue
+          for (const rel of ['dist/bin/wine', 'files/bin/wine', 'bin/wine']) {
+            const winePath = path.join(p, dir, rel)
+            try {
+              if (fs.existsSync(winePath) && fs.statSync(winePath).isFile()) found.push(winePath)
+            } catch { /* ignore */ }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  return found
+}
+
+/** Returns { needed, found, path, version, isInternal, isProton } — Wine is only needed off Windows. */
+async function detectWine(configuredPath, plat = platform, extraCandidates = []) {
   if (plat === 'win32') return { needed: false, found: true, path: null, version: null }
-  const candidates = [configuredPath, which('wine'), which('wine64'), '/usr/bin/wine', '/usr/local/bin/wine', '/opt/wine-staging/bin/wine'].filter(Boolean)
+  const extra = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
+  const candidates = [
+    configuredPath,
+    ...extra,
+    which('wine'),
+    which('wine64'),
+    '/usr/bin/wine',
+    '/usr/local/bin/wine',
+    '/opt/wine-staging/bin/wine',
+    ...findSteamProtonWineCandidates()
+  ].filter(Boolean)
   for (const c of candidates) {
     const version = await wineVersion(c)
-    if (version) return { needed: true, found: true, path: c, version }
+    if (version) {
+      const isInternal = c.includes('runtime/wine')
+      const isProton = /proton/i.test(c)
+      return { needed: true, found: true, path: c, version, isInternal, isProton }
+    }
   }
   return { needed: true, found: false, path: null, version: null }
 }

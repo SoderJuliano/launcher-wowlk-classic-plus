@@ -95,12 +95,19 @@ class GameLauncher {
 
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
-      const wine = await platform.detectWine(cfg.wine.path, this.platform)
+      const internalWine = path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
+      const wine = await platform.detectWine(cfg.wine.path, this.platform, [internalWine])
       if (!wine.found) throw new LauncherError('WINE_MISSING', 'Wine is required to run the game on this system. Install it (e.g. "sudo pacman -S wine" or "sudo apt install wine") or set its path in Settings.')
       const prefix = cfg.wine.prefix || path.join(this.config.dataDir, 'wineprefix')
       fs.mkdirSync(prefix, { recursive: true })
       command = wine.path
       args = [exe]
+
+      const wineBinDir = path.dirname(wine.path)
+      const wineRootDir = path.dirname(wineBinDir)
+      const wineLibDir = path.join(wineRootDir, 'lib')
+      env.PATH = `${wineBinDir}:${env.PATH || ''}`
+      env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
