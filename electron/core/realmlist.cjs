@@ -35,7 +35,7 @@ function writeAtomic(file, content) {
   fs.renameSync(tmp, file)
 }
 
-function applyRealmlist(gameDir, realmlist, preferredLocale, accountName) {
+function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, password) {
   if (!REALM_RE.test(realmlist || '')) throw new LauncherError('CONFIG_INVALID', `Invalid realmlist: ${realmlist}`)
   const locales = detectLocales(gameDir)
   if (!locales.length) throw new LauncherError('INSTALL_INVALID', 'No locale folder found in Data/.')
@@ -60,18 +60,27 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName) {
     const accLine = `SET accountName "${accountName}"`
     text = /^SET accountName .*$/im.test(text) ? text.replace(/^SET accountName .*$/im, accLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${accLine}\r\n`
     if (!/^SET accounttype /im.test(text)) text += `SET accounttype "LK"\r\n`
+    if (password) {
+      const escaped = String(password).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      const listLine = `SET accountList "AUTOLOGIN:${escaped}"`
+      text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
+    }
   }
   if (isSteamDeck()) {
     const deckOpts = [
       ['gxResolution', '1280x800'],
-      ['gxWindow', '0'],
-      ['gxMaximize', '0'],
-      ['gxCursor', '0']
+      ['gxWindow', '1'],
+      ['gxMaximize', '1'],
+      ['gxCursor', '1']
     ]
     for (const [k, v] of deckOpts) {
       const line = `SET ${k} "${v}"`
       const re = new RegExp(`^SET ${k} .*$`, 'im')
       text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
+    }
+  } else if (process.platform === 'linux') {
+    if (!/^SET gxCursor /im.test(text) || /^SET gxCursor "0"/im.test(text)) {
+      text = /^SET gxCursor .*$/im.test(text) ? text.replace(/^SET gxCursor .*$/im, 'SET gxCursor "1"') : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET gxCursor "1"\r\n`
     }
   }
   writeAtomic(cfg, text)

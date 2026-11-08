@@ -62,10 +62,11 @@ class GameLauncher {
 
   /**
    * digita.exe types the player's password and hits Enter when the WoW login window appears.
-   * Enables seamless single sign-on from the launcher into the 3.3.5a client.
+   * On Linux / Steam Deck, direct GlueXML DefaultServerLogin handles auto-login cleanly without wine keystroke simulation.
    */
   #startAutoLogin(dir, command, env, password) {
     if (!password) return
+    if (this.platform !== 'win32') return
     let helper = path.join(dir, 'digita.exe')
     if (!fs.existsSync(helper)) {
       const bundled = path.join(__dirname, '..', 'bin', 'digita.exe')
@@ -75,8 +76,7 @@ class GameLauncher {
     }
     if (!fs.existsSync(helper)) return
     try {
-      const wine = this.platform !== 'win32'
-      const proc = this.spawn(wine ? command : helper, wine ? [helper, password] : [password], {
+      const proc = this.spawn(helper, [password], {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`autologin did not start: ${err.message}`))
@@ -92,9 +92,20 @@ class GameLauncher {
     const client = this.config.client(id)
     const v = this.installer.verify(id)
     if (!v.installed) throw new LauncherError('NOT_INSTALLED', v.missing.length ? `Installation is incomplete (${v.missing.join(', ')}). Use Repair.` : 'The game is not installed.')
-    this.installer.ensureRealmlist(id, credentials?.username)
+    this.installer.ensureRealmlist(id, credentials?.username, credentials?.password)
 
     const dir = this.config.clientDir(id)
+    const glueDir = path.join(dir, 'Interface', 'GlueXML')
+    fs.mkdirSync(glueDir, { recursive: true })
+    const bundledLogin = path.join(__dirname, '..', 'bin', 'AccountLogin.lua')
+    if (fs.existsSync(bundledLogin)) {
+      try {
+        fs.copyFileSync(bundledLogin, path.join(glueDir, 'AccountLogin.lua'))
+      } catch (err) {
+        log.warn('could not copy AccountLogin.lua to Interface/GlueXML', err.message)
+      }
+    }
+
     const exe = resolveInside(dir, client.executable)
     let command = exe
     let args = []

@@ -30,10 +30,14 @@ test('auto-login sets accountName in Config.wtf and passes password to digita.ex
   const launcher = new GameLauncher({ config, installer, spawnImpl, platformName: 'win32' })
   await launcher.launch('wow32', { credentials: { username: 'arthas', password: 'frostmourne123' } })
 
-  // Verify Config.wtf has accountName
+  // Verify Config.wtf has accountName and accountList AUTOLOGIN
   const cfgPath = path.join(dir, 'WTF', 'Config.wtf')
   const cfgContent = fs.readFileSync(cfgPath, 'utf8')
   assert.match(cfgContent, /SET accountName "arthas"/)
+  assert.match(cfgContent, /SET accountList "AUTOLOGIN:frostmourne123"/)
+
+  // Verify Interface/GlueXML/AccountLogin.lua was deployed
+  assert.ok(fs.existsSync(path.join(dir, 'Interface', 'GlueXML', 'AccountLogin.lua')))
 
   // Verify digita.exe was spawned with the password
   const digitaCall = spawned.find(s => s.cmd.endsWith('digita.exe'))

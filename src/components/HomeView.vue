@@ -212,10 +212,10 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .lnk { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 4px; border: 0; background: transparent; color: var(--text-300); cursor: pointer; text-align: left; font-size: .88rem; }
 .lnk:hover { background: rgba(127, 203, 255, .06); color: var(--text-100); }
 
-.stage { position: relative; display: grid; grid-template-rows: auto 1fr auto; padding: 18px 28px 22px; min-width: 0; }
+.stage { position: relative; display: grid; grid-template-rows: auto 1fr auto; padding: 18px 28px 22px; min-width: 0; min-height: 0; overflow: hidden; }
 .stage__top { display: flex; justify-content: space-between; align-items: center; }
 .who { display: flex; align-items: center; gap: 8px; font: 600 .86rem var(--font-display); color: var(--text-100); letter-spacing: .06em; }
-.hero { align-self: center; max-width: 620px; }
+.hero { align-self: center; max-width: 620px; overflow-y: auto; max-height: 100%; }
 .hero__kicker { font: 600 .7rem/1 var(--font-body); letter-spacing: .3em; text-transform: uppercase; color: var(--ice-200); margin: 0 0 14px; }
 .hero__title { white-space: nowrap; font: 900 clamp(2.2rem, 4.6vw, 3.8rem)/1 var(--font-deco); text-transform: uppercase; background: linear-gradient(180deg, #fff, #d6efff 40%, #7fcbff 75%, #2a93e0); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .6)) drop-shadow(0 0 30px rgba(95, 190, 255, .4)); }
 .hero__title em { font-style: normal; background: linear-gradient(180deg, #fff1c9, #e9c46a 50%, #9a6f22); -webkit-background-clip: text; background-clip: text; }
@@ -231,6 +231,19 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .wine-alert__content p { margin: 0; font-size: .82rem; line-height: 1.4; }
 .btn--wine { align-self: flex-start; height: 32px; padding: 0 14px; font-size: .72rem; background: var(--gold-400); color: #1a1005; font-weight: 700; border-radius: 4px; border: 1px solid var(--gold-200); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .btn--wine:hover:not(:disabled) { filter: brightness(1.15); }
+
+@media (max-height: 720px) {
+  .stage { padding: 10px 20px 12px; }
+  .hero__kicker { margin: 0 0 4px; font-size: .62rem; }
+  .hero__title { font-size: 2.2rem; }
+  .hero__tag { margin: 4px 0 10px; font-size: .92rem; }
+  .hero__facts { gap: 6px; }
+  .hero__facts div { padding: 4px 8px; }
+  .hero__facts dt { margin-bottom: 2px; }
+  .hero__warn { margin-top: 6px; }
+  .bar { padding: 8px 14px; gap: 12px; }
+  .main { height: 40px; min-width: 120px; font-size: .8rem; }
+}
 
 .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; align-items: center; padding: 16px 20px; }
 .bar__info { min-width: 0; display: grid; gap: 8px; }
