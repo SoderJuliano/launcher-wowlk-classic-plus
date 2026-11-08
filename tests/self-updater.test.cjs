@@ -119,6 +119,39 @@ test('AuthenticationService preserves password across refresh and restore', asyn
   assert.equal(auth2.password, 'SecretPassword123')
 })
 
+test('AuthenticationService machine fallback on SteamOS Game Mode (isEncryptionAvailable returns false)', async () => {
+  const data = tmpDir()
+  const noKeyringStore = {
+    isEncryptionAvailable: () => false,
+    encryptString: () => { throw new Error('Keyring unavailable') },
+    decryptString: () => { throw new Error('Keyring unavailable') }
+  }
+  const fakeApi = {
+    request: async (method, path) => {
+      if (path === '/auth/login') return { access_token: 'acc-deck', expires_in: 900, refresh_token: 'ref-deck', user: { id: 2, username: 'DECKUSER' } }
+      if (path === '/auth/refresh') return { access_token: 'acc-deck-ref', expires_in: 900, refresh_token: 'ref-deck-2', user: { id: 2, username: 'DECKUSER' } }
+      throw new Error(`Unexpected path: ${path}`)
+    }
+  }
+
+  const { AuthenticationService } = require('../electron/core/AuthenticationService.cjs')
+  const auth = new AuthenticationService({ api: fakeApi, dataDir: data, secureStore: noKeyringStore, platform: 'linux', launcherVersion: '0.1.4' })
+  await auth.login({ username: 'DECKUSER', password: 'DeckPassword!', remember: true })
+  assert.equal(auth.password, 'DeckPassword!')
+
+  // Check file exists on disk and is encrypted (not plain text)
+  const raw = fs.readFileSync(path.join(data, 'session.bin'))
+  assert.ok(!raw.toString().includes('DeckPassword!'), 'file should be encrypted')
+  assert.ok(!raw.toString().includes('ref-deck'), 'refresh token should be encrypted')
+
+  // Restore in a new instance with no keyring available
+  const auth2 = new AuthenticationService({ api: fakeApi, dataDir: data, secureStore: noKeyringStore, platform: 'linux', launcherVersion: '0.1.4' })
+  const user = await auth2.restore()
+  assert.equal(user.username, 'DECKUSER')
+  assert.equal(auth2.password, 'DeckPassword!')
+  assert.ok(auth2.isAuthenticated())
+})
+
 test('LauncherController play() triggers update first if updateAvailable is true', async () => {
   const { LauncherController } = require('../electron/core/LauncherController.cjs')
   let updateCalled = false

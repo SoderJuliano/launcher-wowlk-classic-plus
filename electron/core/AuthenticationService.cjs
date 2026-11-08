@@ -9,10 +9,47 @@
  */
 const fs = require('node:fs')
 const path = require('node:path')
+const crypto = require('node:crypto')
+const os = require('node:os')
 const { LauncherError } = require('./errors.cjs')
 const log = require('./logger.cjs')
 
 const REFRESH_MARGIN_MS = 60_000
+const FALLBACK_MAGIC = Buffer.from('SLKP_ENC1') // Soder Launcher KeyStore Profile
+
+function getMachineKey() {
+  let seed = ''
+  try { seed = fs.readFileSync('/etc/machine-id', 'utf8').trim() } catch {}
+  if (!seed) {
+    try { seed = fs.readFileSync('/var/lib/dbus/machine-id', 'utf8').trim() } catch {}
+  }
+  if (!seed) {
+    try { seed = `${os.hostname()}-${os.userInfo().username}` } catch { seed = os.hostname() }
+  }
+  return crypto.scryptSync(seed, 'soder-launcher-salt-2026', 32)
+}
+
+function fallbackEncrypt(plaintext) {
+  const key = getMachineKey()
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return Buffer.concat([FALLBACK_MAGIC, iv, tag, encrypted])
+}
+
+function fallbackDecrypt(buf) {
+  if (buf.length < FALLBACK_MAGIC.length + 12 + 16) throw new Error('Invalid encrypted buffer')
+  const magic = buf.subarray(0, FALLBACK_MAGIC.length)
+  if (!magic.equals(FALLBACK_MAGIC)) throw new Error('Magic mismatch')
+  const iv = buf.subarray(FALLBACK_MAGIC.length, FALLBACK_MAGIC.length + 12)
+  const tag = buf.subarray(FALLBACK_MAGIC.length + 12, FALLBACK_MAGIC.length + 28)
+  const ciphertext = buf.subarray(FALLBACK_MAGIC.length + 28)
+  const key = getMachineKey()
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(tag)
+  return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8')
+}
 
 class AuthenticationService {
   /**
@@ -103,8 +140,25 @@ class AuthenticationService {
   async restore() {
     if (!fs.existsSync(this.file)) return null
     try {
-      if (!this.secure.isEncryptionAvailable()) return null
-      const saved = JSON.parse(this.secure.decryptString(fs.readFileSync(this.file)))
+      const data = fs.readFileSync(this.file)
+      let decryptedText = null
+      if (data.length >= FALLBACK_MAGIC.length && data.subarray(0, FALLBACK_MAGIC.length).equals(FALLBACK_MAGIC)) {
+        decryptedText = fallbackDecrypt(data)
+      } else if (this.secure?.isEncryptionAvailable && this.secure.isEncryptionAvailable()) {
+        try {
+          decryptedText = this.secure.decryptString(data)
+        } catch {
+          decryptedText = fallbackDecrypt(data)
+        }
+      } else {
+        try {
+          decryptedText = fallbackDecrypt(data)
+        } catch {
+          return null
+        }
+      }
+      if (!decryptedText) return null
+      const saved = JSON.parse(decryptedText)
       const savedPwd = saved.password || null
       this.session = { accessToken: '', expiresAt: 0, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt, user: saved.user, password: savedPwd }
       await this.refresh()
@@ -130,7 +184,7 @@ class AuthenticationService {
   }
 
   #persist() {
-    if (!this.session?.refreshToken || !this.secure.isEncryptionAvailable()) return
+    if (!this.session?.refreshToken) return
     const payload = JSON.stringify({
       refreshToken: this.session.refreshToken,
       refreshExpiresAt: this.session.refreshExpiresAt,
@@ -138,7 +192,18 @@ class AuthenticationService {
       password: this.session.password || undefined
     })
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
-    fs.writeFileSync(this.file, this.secure.encryptString(payload), { mode: 0o600 })
+    let buf
+    if (this.secure?.isEncryptionAvailable && this.secure.isEncryptionAvailable()) {
+      try {
+        buf = this.secure.encryptString(payload)
+      } catch (err) {
+        log.warn('safeStorage encryption failed, using machine fallback', err.message)
+        buf = fallbackEncrypt(payload)
+      }
+    } else {
+      buf = fallbackEncrypt(payload)
+    }
+    fs.writeFileSync(this.file, buf, { mode: 0o600 })
   }
 
   #forgetDisk() {

@@ -11,6 +11,15 @@ const { LauncherError } = require('./errors.cjs')
 
 const REALM_RE = /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/
 
+function isSteamDeck() {
+  if (process.env.STEAM_DECK === '1' || process.env.SteamOS === '1') return true
+  try {
+    const prod = fs.readFileSync('/sys/devices/virtual/dmi/id/product_name', 'utf8')
+    if (/Jupiter|Galileo/i.test(prod)) return true
+  } catch {}
+  return false
+}
+
 /** Locale folders inside Data/ look like "enUS", "ptBR"… */
 function detectLocales(gameDir) {
   try {
@@ -51,6 +60,23 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName) {
     const accLine = `SET accountName "${accountName}"`
     text = /^SET accountName .*$/im.test(text) ? text.replace(/^SET accountName .*$/im, accLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${accLine}\r\n`
     if (!/^SET accounttype /im.test(text)) text += `SET accounttype "LK"\r\n`
+  }
+  if (isSteamDeck()) {
+    const deckOpts = [
+      ['gxResolution', '1280x800'],
+      ['gxWindow', '1'],
+      ['gxMaximize', '0'],
+      ['gxCursor', '1']
+    ]
+    for (const [k, v] of deckOpts) {
+      const line = `SET ${k} "${v}"`
+      const re = new RegExp(`^SET ${k} .*$`, 'im')
+      text = re.test(text) ? text.replace(re, line) : `${text.replace(/\\s*$/, '')}${text ? '\\r\\n' : ''}${line}\\r\\n`
+    }
+  } else if (process.platform === 'linux') {
+    if (!/^SET gxCursor /im.test(text) || /^SET gxCursor "0"/im.test(text)) {
+      text = /^SET gxCursor .*$/im.test(text) ? text.replace(/^SET gxCursor .*$/im, 'SET gxCursor "1"') : `${text.replace(/\\s*$/, '')}${text ? '\\r\\n' : ''}SET gxCursor "1"\\r\\n`
+    }
   }
   writeAtomic(cfg, text)
   written.push('WTF/Config.wtf')

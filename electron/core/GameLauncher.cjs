@@ -39,7 +39,13 @@ class GameLauncher {
    * It closes itself with the game. Optional: a failure here must never stop the game.
    */
   #startControllerReader(dir, command, env) {
-    const reader = path.join(dir, 'SoderPad.exe')
+    let reader = path.join(dir, 'SoderPad.exe')
+    if (!fs.existsSync(reader)) {
+      const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
+      if (fs.existsSync(bundled)) {
+        try { fs.copyFileSync(bundled, reader) } catch (e) { log.warn('could not copy bundled SoderPad.exe', e.message) }
+      }
+    }
     if (!fs.existsSync(reader)) return
     try {
       const wine = this.platform !== 'win32'
