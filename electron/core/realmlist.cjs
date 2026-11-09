@@ -72,10 +72,12 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
       text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
     }
   }
+
   // Previne vídeos de introdução (tela preta no Wine/Steam Deck) e bypassa termos já aceitos
   const commonOpts = [
     ['movie', '0'],
     ['expansionMovie', '0'],
+    ['playIntroMovie', '0'],
     ['movieSubtitle', '0'],
     ['readTOS', '1'],
     ['readEULA', '1'],

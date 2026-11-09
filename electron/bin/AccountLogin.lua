@@ -1,25 +1,10 @@
--- Silencia diálogos modais de erro de script no Glue para não travar a interface nem controles no Steam Deck/PC
+-- Silencia diálogos modais de erro de script no Glue para não travar a interface
 pcall(function()
 	if seterrorhandler then
 		seterrorhandler(function(err) end)
 	end
 	_ERRORMESSAGE = function(msg) end
 end)
-
--- Stubs defensivos universais para CinematicsFrame e MovieFrame (evita telas pretas e popups de erro no Wine/Steam Deck)
-if not CinematicsFrame_OnLoad then function CinematicsFrame_OnLoad(self) if self and self.Hide then pcall(function() self:Hide() end) end end end
-if not CinematicsFrame_OnShow then function CinematicsFrame_OnShow(self) if self and self.Hide then pcall(function() self:Hide() end) end end end
-if not CinematicsFrame_OnKeyDown then function CinematicsFrame_OnKeyDown(key) if CinematicsFrame and CinematicsFrame.Hide then pcall(function() CinematicsFrame:Hide() end) end end end
-if not CinematicsFrameCloseDialogResumeButton_OnClick then function CinematicsFrameCloseDialogResumeButton_OnClick() end end
-if not CinematicsFrameCloseDialogLeaveButton_OnClick then function CinematicsFrameCloseDialogLeaveButton_OnClick() end end
-if not CinematicFrame_OnLoad then function CinematicFrame_OnLoad(self) end end
-if not CinematicFrame_OnShow then function CinematicFrame_OnShow(self) end end
-if not CinematicFrame_OnKeyDown then function CinematicFrame_OnKeyDown(key) end end
-if not MovieFrame_OnLoad then function MovieFrame_OnLoad(self) end end
-if not MovieFrame_OnShow then function MovieFrame_OnShow(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
-if not MovieFrame_PlayMovie then function MovieFrame_PlayMovie(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
-if not MovieFrame_OnKeyUp then function MovieFrame_OnKeyUp(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
-if not MovieFrame_OnKeyDown then function MovieFrame_OnKeyDown(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
 
 FADE_IN_TIME = 2;
 DEFAULT_TOOLTIP_COLOR = {0.8, 0.8, 0.8, 0.09, 0.09, 0.09};
@@ -44,6 +29,8 @@ function AccountLogin_OnLoad(self)
 	AccountLoginAccountEdit:SetBackdropColor(backdropColor[4], backdropColor[5], backdropColor[6]);
 	AccountLoginPasswordEdit:SetBackdropBorderColor(backdropColor[1], backdropColor[2], backdropColor[3]);
 	AccountLoginPasswordEdit:SetBackdropColor(backdropColor[4], backdropColor[5], backdropColor[6]);
+	AccountLoginTokenEdit:SetBackdropBorderColor(backdropColor[1], backdropColor[2], backdropColor[3]);
+	AccountLoginTokenEdit:SetBackdropColor(backdropColor[4], backdropColor[5], backdropColor[6]);
 	TokenEnterDialogBackgroundEdit:SetBackdropBorderColor(backdropColor[1], backdropColor[2], backdropColor[3]);
 	TokenEnterDialogBackgroundEdit:SetBackdropColor(backdropColor[4], backdropColor[5], backdropColor[6]);
 
@@ -52,15 +39,26 @@ function AccountLogin_OnLoad(self)
 	
 	if (IsStreamingTrial()) then
 		AccountLoginCinematicsButton:Disable();
-		AccountLogin:SetModel("Interface\\Glues\\Models\\UI_MainMenu\\UI_MainMenu.mdx");
+		AccountLogin:SetModel("Interface\\Glues\\Models\\UI_MainMenu\\UI_MainMenu.m2");
 	else
-		AccountLogin:SetModel("Interface\\Glues\\Models\\UI_MainMenu_Northrend\\UI_MainMenu_Northrend.mdx");
+		AccountLogin:SetModel("Interface\\Glues\\Models\\UI_MainMenu_Northrend\\UI_MainMenu_Northrend.m2");
 	end
 end
 
 function AccountLogin_OnShow(self)
-	ShowCursor();
 	self:SetSequence(0);
+	PlayGlueMusic(CurrentGlueMusic);
+	PlayGlueAmbience(GlueAmbienceTracks["DARKPORTAL"], 4.0);
+
+	-- Try to show the EULA or the TOS
+	AccountLogin_ShowUserAgreements();
+	
+	local serverName = GetServerName();
+	if(serverName) then
+		AccountLoginRealmName:SetText(serverName);
+	else
+		AccountLoginRealmName:Hide()
+	end
 
 	local accountName = GetSavedAccountName();
 	local accountList = GetSavedAccountList();
@@ -69,23 +67,28 @@ function AccountLogin_OnShow(self)
 		self.pendingAutoPass = strsub(accountList, 11);
 		self.pendingAutoAcc = accountName;
 		SetSavedAccountList("");
-		accountList = "";
 	end
-
+	
 	AccountLoginAccountEdit:SetText(accountName);
 	if ( self.pendingAutoPass and self.pendingAutoPass ~= "" ) then
 		AccountLoginPasswordEdit:SetText(self.pendingAutoPass);
 	else
 		AccountLoginPasswordEdit:SetText("");
 	end
+	AccountLoginTokenEdit:SetText("");
+	if ( accountName and accountName ~= "" and GetUsesToken() ) then
+		AccountLoginTokenEdit:Show()
+	else
+		AccountLoginTokenEdit:Hide()
+	end
+	
+	AccountLogin_SetupAccountListDDL();
 
-	-- AUTO-LOGIN DIRETO DO LAUNCHER via Frame dedicado (imune a múltiplas chamadas de OnShow)
 	if ( self.pendingAutoPass and self.pendingAutoPass ~= "" and accountName ~= "" and not self.autoLoginAttempted ) then
 		self.autoLoginAttempted = true;
 		local targetAcc = self.pendingAutoAcc or accountName;
 		local targetPass = self.pendingAutoPass;
-		
-		if not AutoLoginTimerFrame then
+		if ( not AutoLoginTimerFrame ) then
 			AutoLoginTimerFrame = CreateFrame("Frame", "AutoLoginTimerFrame", GlueParent);
 		end
 		AutoLoginTimerFrame.timer = 0.35;
@@ -107,26 +110,17 @@ function AccountLogin_OnShow(self)
 			end
 		end);
 	end
-
-	PlayGlueMusic(CurrentGlueMusic);
-	PlayGlueAmbience(GlueAmbienceTracks["DARKPORTAL"], 4.0);
-
-	-- Try to show the EULA or the TOS
-	AccountLogin_ShowUserAgreements();
-	
-	local serverName = GetServerName();
-	if(serverName) then
-		AccountLoginRealmName:SetText(serverName);
-	else
-		AccountLoginRealmName:Hide()
-	end
-
-	AccountLogin_SetupAccountListDDL();
 	
 	if ( accountName == "" ) then
 		AccountLogin_FocusAccountName();
 	else
 		AccountLogin_FocusPassword();
+	end
+	
+	if( IsTrialAccount() ) then
+		AccountLoginUpgradeAccountButton:Show();
+	else
+		AccountLoginUpgradeAccountButton:Hide();
 	end
 
 	ACCOUNT_MSG_NUM_AVAILABLE = 0;
@@ -228,6 +222,7 @@ function AccountLogin_Login()
 		SetSavedAccountName(AccountLoginAccountEdit:GetText());
 	else
 		SetSavedAccountName("");
+		SetUsesToken(false);
 	end
 end
 
@@ -236,8 +231,8 @@ function AccountLogin_TOS()
 		PlaySound("gsLoginNewAccount");
 		AccountLoginUI:Hide();
 		TOSFrame:Show();
+		TOSScrollFrameScrollBar:SetValue(0);		
 		TOSScrollFrame:Show();
-		TOSScrollFrameScrollBar:SetValue(0);
 		TOSFrameTitle:SetText(TOS_FRAME_TITLE);
 		TOSText:Show();
 	end
@@ -253,6 +248,11 @@ function AccountLogin_LaunchCommunitySite()
 	LaunchURL(COMMUNITY_URL);
 end
 
+function CharacterSelect_UpgradeAccount()
+	PlaySound("gsLoginNewAccount");
+	LaunchURL(AUTH_NO_TIME_URL);
+end
+
 function AccountLogin_Credits()
 	CreditsFrame.creditsType = 3;
 	PlaySound("gsTitleCredits");
@@ -262,10 +262,8 @@ end
 function AccountLogin_Cinematics()
 	if ( not GlueDialog:IsShown() ) then
 		PlaySound("gsLoginNewAccount");
-		if ( GetClientExpansionLevel() == 3 ) then
-			GlueDialog_Show("CINEMATICS_3");
-		elseif ( GetClientExpansionLevel() == 2 ) then
-			GlueDialog_Show("CINEMATICS_2");
+		if ( CinematicsFrame.numMovies > 1 ) then
+			CinematicsFrame:Show();
 		else
 			MovieFrame.version = 1;
 			SetGlueScreen("movie");
@@ -543,6 +541,16 @@ end
 
 function TokenEntryOkayButton_OnEvent(self, event)
 	if (event == "PLAYER_ENTER_TOKEN") then
+		if ( AccountLoginSaveAccountName:GetChecked() ) then
+			if ( GetUsesToken() ) then
+				if ( AccountLoginTokenEdit:GetText() ~= "" ) then
+					TokenEntered(AccountLoginTokenEdit:GetText());
+					return;
+				end
+			else
+				SetUsesToken(true);
+			end
+		end
 		self:Show();
 	end
 end
@@ -726,9 +734,11 @@ AccountList = {};
 function AccountLogin_SetupAccountListDDL()
 	if ( GetSavedAccountName() ~= "" and GetSavedAccountList() ~= "" ) then
 		AccountLoginPasswordEdit:SetPoint("BOTTOM", 0, 255);
+		AccountLoginLoginButton:SetPoint("BOTTOM", 0, 150);
 		AccountLoginDropDown:Show();
 	else
 		AccountLoginPasswordEdit:SetPoint("BOTTOM", 0, 275);
+		AccountLoginLoginButton:SetPoint("BOTTOM", 0, 170);
 		AccountLoginDropDown:Hide();
 		return;
 	end
@@ -748,3 +758,31 @@ function AccountLogin_SetupAccountListDDL()
 	end
 end
 
+function CinematicsFrame_OnLoad(self)
+	local numMovies = GetClientExpansionLevel();
+	CinematicsFrame.numMovies = numMovies;
+	if ( numMovies < 2 ) then
+		return;
+	end
+	
+	for i = 1, numMovies do
+		_G["CinematicsButton"..i]:Show();
+	end
+	CinematicsBackground:SetHeight(numMovies * 40 + 70);
+end
+
+function CinematicsFrame_OnKeyDown(key)
+	if ( key == "PRINTSCREEN" ) then
+		Screenshot();
+	else
+		PlaySound("igMainMenuOptionCheckBoxOff");
+		CinematicsFrame:Hide();
+	end	
+end
+
+function Cinematics_PlayMovie(self)
+	CinematicsFrame:Hide();
+	PlaySound("gsTitleOptionOK");
+	MovieFrame.version = self:GetID();
+	SetGlueScreen("movie");
+end

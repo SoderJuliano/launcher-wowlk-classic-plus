@@ -345,21 +345,20 @@ class GameLauncher {
 
   /**
    * digita.exe types the player's password and hits Enter when the WoW login window appears.
-   * On Linux / Steam Deck, direct GlueXML DefaultServerLogin handles auto-login cleanly without wine keystroke simulation.
+   * Works both natively on Windows and under Wine on Linux / Steam Deck without modifying GlueXML files.
    */
   #startAutoLogin(dir, command, env, password) {
     if (!password) return
-    if (this.platform !== 'win32') return
     let helper = path.join(dir, 'digita.exe')
-    if (!fs.existsSync(helper)) {
-      const bundled = path.join(__dirname, '..', 'bin', 'digita.exe')
-      if (fs.existsSync(bundled)) {
-        try { fs.copyFileSync(bundled, helper) } catch (e) { log.warn('could not copy bundled digita.exe', e.message) }
-      }
+    const bundled = path.join(__dirname, '..', 'bin', 'digita.exe')
+    if (fs.existsSync(bundled)) {
+      try { fs.copyFileSync(bundled, helper) } catch (e) { log.warn('could not copy bundled digita.exe', e.message) }
     }
     if (!fs.existsSync(helper)) return
     try {
-      const proc = this.spawn(helper, [password], {
+      const spawnCmd = this.platform === 'win32' ? helper : command
+      const spawnArgs = this.platform === 'win32' ? [password] : [helper, password]
+      const proc = this.spawn(spawnCmd, spawnArgs, {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`autologin did not start: ${err.message}`))
@@ -399,64 +398,58 @@ class GameLauncher {
       }
     }
 
-    // Garante que o patch-Z.MPQ de auto-login e stubs de Cinematics seja atualizado apenas se não for o patch-Z customizado (> 100 KB)
-    const bundledMpq = path.join(__dirname, '..', 'bin', 'patch-Z.MPQ')
-    if (fs.existsSync(bundledMpq)) {
-      try {
-        fs.mkdirSync(dataDir, { recursive: true })
-        const dataMpq = path.join(dataDir, 'patch-Z.MPQ')
-        if (!fs.existsSync(dataMpq) || fs.statSync(dataMpq).size <= 100000) {
-          fs.copyFileSync(bundledMpq, dataMpq)
+    // Se versões anteriores (0.1.15/0.1.16) sobrescreveram patch-Z.MPQ com o MPQ pequeno (< 100 KB),
+    // restaura a partir do patch-4.MPQ ou remove o MPQ pequeno para não interferir nos MPQs do cliente.
+    try {
+      const dataZ = path.join(dataDir, 'patch-Z.MPQ')
+      const data4 = path.join(dataDir, 'patch-4.MPQ')
+      if (fs.existsSync(dataZ) && fs.statSync(dataZ).size <= 100000) {
+        if (fs.existsSync(data4) && fs.statSync(data4).size > 100000) {
+          fs.copyFileSync(data4, dataZ)
+        } else {
+          fs.unlinkSync(dataZ)
         }
-      } catch (e) {
-        log.warn('could not copy patch-Z.MPQ to Data', e.message)
       }
-      for (const loc of ['enUS', 'esES', 'ptBR', 'deDE', 'frFR', 'ruRU']) {
-        const locDir = path.join(dataDir, loc)
-        if (fs.existsSync(locDir)) {
-          try {
-            const locMpq = path.join(locDir, `patch-${loc}-Z.MPQ`)
-            if (!fs.existsSync(locMpq) || fs.statSync(locMpq).size <= 100000) {
-              fs.copyFileSync(bundledMpq, locMpq)
+    } catch {}
+
+    for (const loc of ['enUS', 'esES', 'ptBR', 'deDE', 'frFR', 'ruRU']) {
+      const locDir = path.join(dataDir, loc)
+      if (fs.existsSync(locDir)) {
+        try { fs.rmSync(path.join(locDir, `patch-${loc}-9.MPQ`), { force: true }) } catch {}
+        try {
+          const locZ = path.join(locDir, `patch-${loc}-Z.MPQ`)
+          const loc4 = path.join(locDir, `patch-${loc}-4.MPQ`)
+          if (fs.existsSync(locZ) && fs.statSync(locZ).size <= 100000) {
+            if (fs.existsSync(loc4) && fs.statSync(loc4).size > 100000) {
+              fs.copyFileSync(loc4, locZ)
+            } else {
+              fs.unlinkSync(locZ)
             }
-          } catch {}
-        }
+          }
+        } catch {}
       }
     }
 
-    const onDeck = isSteamDeck()
-
-    // No Linux / Steam Deck: elimina ponte.c proxy e evita o deadlock de apresentação em primeiro plano do DXVK 3.1.1-git no SteamOS
+    // No Linux / Steam Deck: restaura d3d9_orig.dll puro (DXVK) eliminando a ponte.c proxy (17 KB)
     if (this.platform !== 'win32') {
       try {
         const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
         const d3d9Current = path.join(dir, 'd3d9.dll')
         const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
-        if (onDeck) {
-          // No SteamOS (Gamescope / KWin XWayland), o d3d9_orig.dll (DXVK v3.1.1-41-g5cbf10835 experimental com VK_EXT_present_timing)
-          // entra em deadlock de swapchain assim que a janela recebe foco em primeiro plano, só destravando quando vai para background.
-          // Usar o wined3d nativo do Wine (OpenGL 4.6 radeonsi) elimina 100% o congelamento em primeiro plano no Steam Deck.
-          if (fs.existsSync(d3d9Current)) {
-            const curSize = fs.statSync(d3d9Current).size
-            if (curSize > 500000 && !fs.existsSync(d3d9Bak)) {
-              fs.renameSync(d3d9Current, d3d9Bak)
-            } else {
-              fs.unlinkSync(d3d9Current)
-            }
-            log.info('SteamOS detected: disabled experimental DXVK d3d9.dll in favor of Wine native wined3d (radeonsi) to prevent foreground freeze')
+        if (fs.existsSync(d3d9Bak)) {
+          try {
+            if (!fs.existsSync(d3d9Current)) fs.renameSync(d3d9Bak, d3d9Current)
+            else fs.unlinkSync(d3d9Bak)
+          } catch {}
+        }
+        if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
+          if (!fs.existsSync(d3d9Current) || fs.statSync(d3d9Current).size < 100000) {
+            fs.copyFileSync(d3d9Orig, d3d9Current)
+            log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
           }
-        } else if (fs.existsSync(d3d9Current)) {
-          const curSize = fs.statSync(d3d9Current).size
-          if (curSize < 100000) {
-            // É a ponte.c (17 KB): trava no loader do Wine ao chamar CreateThread dentro de DllMain
-            if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
-              fs.copyFileSync(d3d9Orig, d3d9Current)
-              log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
-            } else {
-              fs.unlinkSync(d3d9Current)
-              log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
-            }
-          }
+        } else if (fs.existsSync(d3d9Current) && fs.statSync(d3d9Current).size < 100000) {
+          fs.unlinkSync(d3d9Current)
+          log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
         }
       } catch (e) {
         log.warn('could not sanitize d3d9 proxy', e.message)
@@ -484,17 +477,16 @@ class GameLauncher {
         } catch {}
       }
 
-      // Desativa bloqueios de VSync / Direct Scanout / Present Wait no Gamescope, KWin, Mesa e DXVK
+      // Desativa Gamescope WSI e bloqueios de VSync / Direct Scanout no SteamOS/KWin/DXVK
       env.ENABLE_GAMESCOPE_WSI = '0'
       env.vblank_mode = '0'
       env.__GL_SYNC_TO_VBLANK = '0'
-      env.MESA_VK_WSI_PRESENT_MODE = 'immediate'
       env.KWIN_X11_NO_SYNC_TO_VBLANK = '1'
       env.KWIN_DRM_NO_DIRECT_SCANOUT = '1'
       env.SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS = '0'
       env.SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD = '1'
 
-      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=0;dxgi.syncInterval=0;dxvk.tearFree=False;dxvk.enablePresentTiming=False;dxvk.latencySleep=False;dxvk.allowFse=False;d3d9.maxFrameLatency=3;d3d9.maxFrameRate=60;dxvk.numCompilerThreads=2'
+      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=0;dxgi.syncInterval=0;dxvk.tearFree=False;d3d9.maxFrameLatency=3;d3d9.maxFrameRate=60;d3d9.numBackBuffers=3'
       try {
         const dxvkConf = path.join(dir, 'dxvk.conf')
         const safeDxvkConf = [
@@ -502,11 +494,9 @@ class GameLauncher {
           'd3d9.presentInterval = 0',
           'dxgi.syncInterval = 0',
           'dxvk.tearFree = False',
-          'dxvk.enablePresentTiming = False',
-          'dxvk.latencySleep = False',
-          'dxvk.allowFse = False',
           'd3d9.maxFrameLatency = 3',
           'd3d9.maxFrameRate = 60',
+          'd3d9.numBackBuffers = 3',
           'dxvk.numCompilerThreads = 2',
           '',
         ].join('\n')
@@ -533,23 +523,16 @@ class GameLauncher {
       const wineBinDir = path.dirname(wine.path)
       const wineRootDir = path.dirname(wineBinDir)
       const wineLibDir = path.join(wineRootDir, 'lib')
-      const wineLib64Dir = path.join(wineRootDir, 'lib64')
       env.PATH = `${wineBinDir}:${env.PATH || ''}`
-      // Nunca prependa /usr/lib em LD_LIBRARY_PATH (no Arch/SteamOS é 64-bit e quebra loaders 32-bit de Vulkan/Mesa)
+      // Nunca prependa /usr/lib ou lib64 em LD_LIBRARY_PATH de binário 32-bit
       if (!wine.path.startsWith('/usr/bin/')) {
-        const libs = [wineLib64Dir, wineLibDir].filter((p) => fs.existsSync(p))
-        if (libs.length) {
-          env.LD_LIBRARY_PATH = `${libs.join(':')}:${env.LD_LIBRARY_PATH || ''}`
-        }
+        env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
       }
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
-      if (onDeck) {
-        env.WINEDLLOVERRIDES = 'd3d9=b;dxgi=n,b'
-      } else {
-        env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'd3d9,dxgi=n,b'
-      }
+      // The package ships DXVK (d3d9.dll/dxgi.dll): make Wine prefer them.
+      env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'd3d9,dxgi=n,b'
       // First run: create the prefix before starting the game (racing wineboot breaks RpcSs).
       if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')

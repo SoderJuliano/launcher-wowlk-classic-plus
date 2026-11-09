@@ -124,10 +124,7 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    try {
-      if (process.platform === 'linux') win?.hide()
-      else win?.minimize()
-    } catch {}
+    try { win?.minimize() } catch {}
     return res
   })
   handle('installWine', () => controller.installWine())
