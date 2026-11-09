@@ -95,6 +95,11 @@ class GameLauncher {
     this.installer.ensureRealmlist(id, credentials?.username, credentials?.password)
 
     const dir = this.config.clientDir(id)
+    const exe = resolveInside(dir, client.executable)
+    let command = exe
+    let args = []
+    const env = platform.cleanEnvForSystemBinary ? platform.cleanEnvForSystemBinary({ ...process.env }) : { ...process.env }
+
     const dataDir = path.join(dir, 'Data')
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
     try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
@@ -169,11 +174,6 @@ class GameLauncher {
         env.VKBASALT_CONFIG_FILE = '/dev/null'
       }
     }
-
-    const exe = resolveInside(dir, client.executable)
-    let command = exe
-    let args = []
-    const env = platform.cleanEnvForSystemBinary ? platform.cleanEnvForSystemBinary({ ...process.env }) : { ...process.env }
 
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
