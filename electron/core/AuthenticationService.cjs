@@ -168,6 +168,11 @@ class AuthenticationService {
       if (!decryptedText) return null
       const saved = JSON.parse(decryptedText)
       const savedPwd = saved.password || null
+      if (!savedPwd) {
+        log.info('saved session lacks password for game auto-login, prompting normal login')
+        this.#forgetDisk()
+        return null
+      }
       this.session = { accessToken: '', expiresAt: 0, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt, user: saved.user, password: savedPwd }
       await this.refresh()
       if (savedPwd && this.session) this.session.password = savedPwd
