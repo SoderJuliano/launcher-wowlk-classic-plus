@@ -104,7 +104,7 @@ class GameLauncher {
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
     try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
 
-    const glueFiles = ['AccountLogin.lua', 'MovieFrame.lua', 'MovieFrame.xml']
+    const glueFiles = ['AccountLogin.lua']
     for (const f of glueFiles) {
       const src = path.join(__dirname, '..', 'bin', f)
       if (fs.existsSync(src)) {
@@ -157,16 +157,22 @@ class GameLauncher {
         log.warn('could not sanitize d3d9 proxy', e.message)
       }
 
-      try {
-        const dxvkConf = path.join(dir, 'dxvk.conf')
-        if (fs.existsSync(dxvkConf)) {
-          let conf = fs.readFileSync(dxvkConf, 'utf8')
-          if (conf.includes('d3d9.deferSurfaceCreation = True')) {
-            conf = conf.replace('d3d9.deferSurfaceCreation = True', 'd3d9.deferSurfaceCreation = False')
-            fs.writeFileSync(dxvkConf, conf)
+      // Somente no Steam Deck/Gamescope: desativa deferSurfaceCreation se necessario
+      const isDeck = process.env.STEAM_DECK === '1' || process.env.SteamOS === '1' || (() => {
+        try { return /Jupiter|Galileo/i.test(fs.readFileSync('/sys/devices/virtual/dmi/id/product_name', 'utf8')) } catch { return false }
+      })()
+      if (isDeck) {
+        try {
+          const dxvkConf = path.join(dir, 'dxvk.conf')
+          if (fs.existsSync(dxvkConf)) {
+            let conf = fs.readFileSync(dxvkConf, 'utf8')
+            if (conf.includes('d3d9.deferSurfaceCreation = True')) {
+              conf = conf.replace('d3d9.deferSurfaceCreation = True', 'd3d9.deferSurfaceCreation = False')
+              fs.writeFileSync(dxvkConf, conf)
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
 
       // Se /opt/reshade não existir (como no Steam Deck), desativa vkBasalt para evitar crash/tela preta no Vulkan
       if (!fs.existsSync('/opt/reshade/shaders')) {

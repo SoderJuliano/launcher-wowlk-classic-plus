@@ -71,6 +71,14 @@ class AuthenticationService {
   get password() { return this.session?.password ?? null }
   isAuthenticated() { return !!this.session && this.session.expiresAt > this.now() }
 
+  savePasswordForAutoLogin(password) {
+    if (!this.session) return false
+    this.session.password = String(password)
+    this.#persist()
+    log.info(`saved password for auto-login for user ${this.session.user?.username}`)
+    return true
+  }
+
   #fromResponse(r) {
     if (!r || typeof r.access_token !== 'string' || !r.user || typeof r.user.username !== 'string') {
       throw new LauncherError('API_BAD_RESPONSE', 'Unexpected login response from the server.')

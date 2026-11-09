@@ -107,6 +107,7 @@ class LauncherController {
       api: this.api.lastStatus,
       user: this.auth.user,
       authenticated: this.auth.isAuthenticated(),
+      hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
       launcherUpdate: this.launcherUpdate,
       clients: Object.keys(cfg.clients).map((id) => this.clientState(id)),
@@ -135,11 +136,22 @@ class LauncherController {
   async login(creds) {
     const user = await this.auth.login(creds)
     for (const id of Object.keys(this.config.get().clients)) {
-      if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username)
+      if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username, creds?.password)
     }
     await this.refreshManifests()
     this.#publish()
     return user
+  }
+
+  savePasswordForAutoLogin(password) {
+    const ok = this.auth.savePasswordForAutoLogin(password)
+    if (ok) {
+      for (const id of Object.keys(this.config.get().clients)) {
+        if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, this.auth.user?.username, password)
+      }
+    }
+    this.#publish()
+    return ok
   }
 
   async logout() {

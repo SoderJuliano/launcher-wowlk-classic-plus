@@ -1,14 +1,3 @@
--- Stubs defensivos para CinematicsFrame e MovieFrame (evita telas pretas/travamento no Wine/Steam Deck)
-if not CinematicsFrame_OnLoad then function CinematicsFrame_OnLoad(self) end end
-if not CinematicsFrame_OnShow then function CinematicsFrame_OnShow(self) end end
-if not CinematicsFrame_OnKeyDown then function CinematicsFrame_OnKeyDown(key) end end
-if not CinematicsFrameCloseDialogResumeButton_OnClick then function CinematicsFrameCloseDialogResumeButton_OnClick() end end
-if not CinematicsFrameCloseDialogLeaveButton_OnClick then function CinematicsFrameCloseDialogLeaveButton_OnClick() end end
-if not MovieFrame_OnLoad then function MovieFrame_OnLoad(self) end end
-if not MovieFrame_OnShow then function MovieFrame_OnShow(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end pcall(function() SetGlueScreen("login") end) pcall(function() ShowCursor() end) end end
-if not MovieFrame_PlayMovie then function MovieFrame_PlayMovie(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end pcall(function() SetGlueScreen("login") end) pcall(function() ShowCursor() end) end end
-if not MovieFrame_OnKeyUp then function MovieFrame_OnKeyUp(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end pcall(function() SetGlueScreen("login") end) pcall(function() ShowCursor() end) end end
-
 FADE_IN_TIME = 2;
 DEFAULT_TOOLTIP_COLOR = {0.8, 0.8, 0.8, 0.09, 0.09, 0.09};
 MAX_PIN_LENGTH = 10;
@@ -77,6 +66,7 @@ function AccountLogin_OnShow(self)
 				if ( not ScanningAccepted() ) then AcceptScanning(); end
 				if ( not ContestAccepted() ) then AcceptContest(); end
 				AccountLogin_Login();
+				SetSavedAccountList("");
 			end
 		end);
 	end

@@ -109,6 +109,7 @@ function handle(channel, fn) {
 function registerIpc() {
   handle('state', () => controller.snapshot())
   handle('login', (creds) => controller.login({ username: creds?.username, password: creds?.password, remember: !!creds?.remember }))
+  handle('savePasswordForAutoLogin', (pwd) => controller.savePasswordForAutoLogin(String(pwd)))
   handle('logout', () => controller.logout())
   handle('checkApi', () => controller.checkApi())
   handle('selectClient', (id) => controller.updateSettings({ selectedClient: String(id) }))

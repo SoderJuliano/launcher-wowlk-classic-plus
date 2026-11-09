@@ -66,12 +66,43 @@ const eta = computed(() => {
 async function run(action, ...args) {
   try { await call(action, ...args) } catch (e) { if (e.code !== 'CANCELLED') toast(e.message) }
 }
+
+const passwordModalOpen = ref(false)
+const autoLoginPasswordInput = ref('')
+const passwordSaving = ref(false)
+
+async function confirmAutoLoginPassword() {
+  if (!autoLoginPasswordInput.value) return
+  passwordSaving.value = true
+  try {
+    await call('savePasswordForAutoLogin', autoLoginPasswordInput.value)
+    passwordModalOpen.value = false
+    run('play', client.value.id)
+  } catch (e) {
+    toast(e.message)
+  } finally {
+    passwordSaving.value = false
+  }
+}
+
+function skipAutoLoginPassword() {
+  passwordModalOpen.value = false
+  run('play', client.value.id)
+}
+
 function main() {
   const c = client.value
   switch (c.button) {
     case 'INSTALL': case 'REPAIR': return run('install', c.id)
     case 'UPDATE': return run('update', c.id)
-    case 'PLAY': return run('play', c.id)
+    case 'PLAY': {
+      if (snap.value.authenticated && !snap.value.hasSavedPassword) {
+        autoLoginPasswordInput.value = ''
+        passwordModalOpen.value = true
+        return
+      }
+      return run('play', c.id)
+    }
     case 'ERROR': call('clearError', c.id); return c.installed ? run('play', c.id) : run('install', c.id)
   }
 }
@@ -188,6 +219,37 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
     </section>
 
     <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" />
+
+    <!-- Modal de confirmacao de senha para auto-login direto (especialmente no Steam Deck) -->
+    <div v-if="passwordModalOpen" class="pwd-overlay" @click.self="skipAutoLoginPassword">
+      <div class="pwd-card">
+        <header class="pwd-head">
+          <Icon name="key" :size="20" />
+          <h3>Login Automático no Jogo</h3>
+        </header>
+        <p class="pwd-desc">
+          Digite a sua senha da conta <b>{{ snap.user?.username }}</b> para salvar e <b>entrar direto no reino</b>, pulando a tela de login no Steam Deck e PC.
+        </p>
+        <form @submit.prevent="confirmAutoLoginPassword" class="pwd-form">
+          <input
+            v-model="autoLoginPasswordInput"
+            type="password"
+            class="pwd-input"
+            placeholder="Sua senha da conta"
+            autofocus
+            required
+          />
+          <div class="pwd-actions">
+            <button type="button" class="btn btn--sub" @click="skipAutoLoginPassword">
+              Entrar sem salvar
+            </button>
+            <button type="submit" class="btn btn--pri" :disabled="!autoLoginPasswordInput || passwordSaving">
+              {{ passwordSaving ? 'Salvando…' : 'Salvar e Jogar' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -275,4 +337,31 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .main--err { background: linear-gradient(180deg, #a33, #6a1a1a); border-color: #ff9a9a; }
 .main:disabled { cursor: default; filter: saturate(.6) brightness(.85); }
 .main--busy:disabled { filter: none; }
+
+.pwd-overlay {
+  position: fixed; inset: 0; z-index: 100; background: rgba(2, 5, 10, .85);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(8px);
+}
+.pwd-card {
+  width: 90%; max-width: 440px; background: #0c1420; border: 1px solid var(--gold-400);
+  border-radius: 8px; padding: 22px; box-shadow: 0 10px 40px rgba(0, 0, 0, .8), 0 0 20px rgba(212, 168, 69, .2);
+}
+.pwd-head { display: flex; align-items: center; gap: 10px; color: var(--gold-200); margin-bottom: 12px; }
+.pwd-head h3 { margin: 0; font: 700 1.1rem var(--font-display); }
+.pwd-desc { font-size: .84rem; line-height: 1.4; color: var(--text-200); margin-bottom: 16px; }
+.pwd-desc b { color: var(--gold-300); }
+.pwd-form { display: grid; gap: 14px; }
+.pwd-input {
+  width: 100%; height: 42px; background: rgba(5, 10, 16, .8); border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 12px; color: #fff; font-size: .95rem;
+}
+.pwd-input:focus { border-color: var(--gold-300); outline: none; }
+.pwd-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.btn--sub { background: transparent; border: 1px solid var(--line); color: var(--text-300); padding: 0 14px; height: 38px; border-radius: 4px; cursor: pointer; }
+.btn--sub:hover { color: #fff; border-color: var(--text-200); }
+.btn--pri {
+  background: linear-gradient(180deg, var(--gold-300), var(--gold-500)); border: 1px solid var(--gold-200);
+  color: #1a1002; font-weight: 700; padding: 0 16px; height: 38px; border-radius: 4px; cursor: pointer;
+}
+.btn--pri:hover:not(:disabled) { filter: brightness(1.1); }
 </style>
