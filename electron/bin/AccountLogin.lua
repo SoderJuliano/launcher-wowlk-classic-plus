@@ -65,31 +65,45 @@ function AccountLogin_OnShow(self)
 	local accountName = GetSavedAccountName();
 	local accountList = GetSavedAccountList();
 
-	AccountLoginAccountEdit:SetText(accountName);
-	AccountLoginPasswordEdit:SetText("");
+	if ( accountList and accountList ~= "" and strsub(accountList, 1, 10) == "AUTOLOGIN:" ) then
+		self.pendingAutoPass = strsub(accountList, 11);
+		self.pendingAutoAcc = accountName;
+		SetSavedAccountList("");
+		accountList = "";
+	end
 
-	-- AUTO-LOGIN DIRETO DO LAUNCHER via Frame dedicado (não bloqueia UI nem sequestra scripts)
-	if ( accountName ~= "" and accountList ~= "" and strsub(accountList, 1, 10) == "AUTOLOGIN:" and not self.autoLoginAttempted ) then
+	AccountLoginAccountEdit:SetText(accountName);
+	if ( self.pendingAutoPass and self.pendingAutoPass ~= "" ) then
+		AccountLoginPasswordEdit:SetText(self.pendingAutoPass);
+	else
+		AccountLoginPasswordEdit:SetText("");
+	end
+
+	-- AUTO-LOGIN DIRETO DO LAUNCHER via Frame dedicado (imune a múltiplas chamadas de OnShow)
+	if ( self.pendingAutoPass and self.pendingAutoPass ~= "" and accountName ~= "" and not self.autoLoginAttempted ) then
 		self.autoLoginAttempted = true;
-		local pass = strsub(accountList, 11);
-		AccountLoginAccountEdit:SetText(accountName);
-		AccountLoginPasswordEdit:SetText(pass);
+		local targetAcc = self.pendingAutoAcc or accountName;
+		local targetPass = self.pendingAutoPass;
 		
 		if not AutoLoginTimerFrame then
 			AutoLoginTimerFrame = CreateFrame("Frame", "AutoLoginTimerFrame", GlueParent);
 		end
-		AutoLoginTimerFrame.timer = 0.5;
+		AutoLoginTimerFrame.timer = 0.35;
 		AutoLoginTimerFrame:SetScript("OnUpdate", function(f, elapsed)
-			f.timer = f.timer - elapsed;
+			f.timer = f.timer - math.min(elapsed or 0.016, 0.1);
 			if ( f.timer <= 0 ) then
 				f:SetScript("OnUpdate", nil);
+				self.pendingAutoPass = nil;
 				if ( not EULAAccepted() ) then AcceptEULA(); end
 				if ( not TOSAccepted() ) then AcceptTOS(); end
 				if ( not TerminationWithoutNoticeAccepted() ) then AcceptTerminationWithoutNotice(); end
 				if ( not ScanningAccepted() ) then AcceptScanning(); end
 				if ( not ContestAccepted() ) then AcceptContest(); end
+				if ( TOSFrame and TOSFrame:IsShown() ) then TOSFrame:Hide(); end
+				if ( AccountLoginUI and not AccountLoginUI:IsShown() ) then AccountLoginUI:Show(); end
+				AccountLoginAccountEdit:SetText(targetAcc);
+				AccountLoginPasswordEdit:SetText(targetPass);
 				AccountLogin_Login();
-				SetSavedAccountList("");
 			end
 		end);
 	end

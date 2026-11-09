@@ -44,7 +44,7 @@ function createServices() {
     emit: (channel, payload) => {
       win?.webContents.send(`olk:${channel}`, payload)
       if (channel === 'game-exit') {
-        try { if (win?.isMinimized()) win.restore(); win?.focus() } catch {}
+        try { win?.show(); if (win?.isMinimized()) win.restore(); win?.focus() } catch {}
       }
     }
   })
@@ -124,7 +124,10 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    try { win?.minimize() } catch {}
+    try {
+      if (process.platform === 'linux') win?.hide()
+      else win?.minimize()
+    } catch {}
     return res
   })
   handle('installWine', () => controller.installWine())

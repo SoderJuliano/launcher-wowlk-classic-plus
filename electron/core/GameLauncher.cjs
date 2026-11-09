@@ -36,18 +36,291 @@ class GameLauncher {
   }
 
   /**
+   * No Linux / SteamOS (Modo Desktop ou Gaming), o driver hid-steam suprime os eventos evdev
+   * do controle integrado quando o Steam está aberto (mapeando apenas o direcional direito como mouse X11),
+   * ou o Wine falha ao abrir os dispositivos XInput no container.
+   * Esta ponte lê diretamente /dev/hidraw* (Valve Steam Deck 28de:1205), /dev/input/js* e /dev/input/event*
+   * sem precisar de permissões root e publica o estado XInput em /dev/shm/soderpad_state.bin para o SoderPad.exe.
+   */
+  #startLinuxInputBridge(dir, parentChild) {
+    if (this.platform === 'win32') return
+    const shmPath = '/dev/shm/soderpad_state.bin'
+    const fallbackPath = path.join(dir, 'soderpad_state.bin')
+    const fds = new Map() // path -> { fd, type }
+    const state = {
+      buttons: 0,
+      lx: 0, ly: 0, rx: 0, ry: 0,
+      lt: 0, rt: 0,
+      seq: 0,
+      active: false,
+    }
+    const outBuf = Buffer.alloc(64)
+    const readBuf = Buffer.alloc(256)
+
+    const writeState = () => {
+      state.seq = (state.seq + 1) >>> 0
+      outBuf.fill(0)
+      outBuf.writeUInt32LE(0x53504144, 0) // 'SPAD'
+      outBuf.writeUInt32LE(1, 4)          // version 1
+      outBuf.writeUInt32LE(state.seq, 8)
+      outBuf.writeUInt32LE(state.buttons >>> 0, 12)
+      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.lx | 0)), 16)
+      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.ly | 0)), 18)
+      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.rx | 0)), 20)
+      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.ry | 0)), 22)
+      outBuf.writeUInt8(Math.max(0, Math.min(255, state.lt | 0)), 24)
+      outBuf.writeUInt8(Math.max(0, Math.min(255, state.rt | 0)), 25)
+      try { fs.writeFileSync(shmPath, outBuf) } catch {}
+      try { fs.writeFileSync(fallbackPath, outBuf) } catch {}
+    }
+
+    const scanDevices = () => {
+      // 1. Steam Deck hidraw (28de:1205)
+      try {
+        const hidraws = fs.readdirSync('/sys/class/hidraw')
+        for (const h of hidraws) {
+          const devPath = `/dev/${h}`
+          if (fds.has(devPath)) continue
+          try {
+            const uevent = fs.readFileSync(`/sys/class/hidraw/${h}/device/uevent`, 'utf8')
+            if (/28DE:00001205|28de:1205/i.test(uevent)) {
+              const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+              fds.set(devPath, { fd, type: 'steamdeck-hidraw' })
+              log.info(`LinuxInputBridge: attached Steam Deck hidraw ${devPath}`)
+            }
+          } catch {}
+        }
+      } catch {}
+
+      // 2. Linux joydev (/dev/input/js0..3)
+      for (let i = 0; i < 4; i++) {
+        const devPath = `/dev/input/js${i}`
+        if (fds.has(devPath) || !fs.existsSync(devPath)) continue
+        try {
+          const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+          fds.set(devPath, { fd, type: 'joydev' })
+          log.info(`LinuxInputBridge: attached joydev ${devPath}`)
+        } catch {}
+      }
+
+      // 3. Linux evdev (/dev/input/event*) para gamepads
+      try {
+        const inputs = fs.readdirSync('/sys/class/input')
+        for (const item of inputs) {
+          if (!item.startsWith('event')) continue
+          const devPath = `/dev/input/${item}`
+          if (fds.has(devPath)) continue
+          try {
+            const name = fs.readFileSync(`/sys/class/input/${item}/device/name`, 'utf8').trim()
+            const evCap = fs.readFileSync(`/sys/class/input/${item}/device/capabilities/ev`, 'utf8').trim()
+            const evMask = parseInt(evCap, 16)
+            const isPadName = /steam|deck|xbox|x-box|pad|controller|gamepad|dualshock|dualsense|8bitdo|generic\s+x-box/i.test(name)
+            const isNotMouseOrKb = !/mouse|touchpad|trackpad|keyboard|power\s+button|sleep|video\s+bus|hdpi|audio|alsa|hdmi|lid/i.test(name)
+            if ((isPadName || ((evMask & 0x0b) === 0x0b)) && isNotMouseOrKb) {
+              const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+              fds.set(devPath, { fd, type: 'evdev' })
+              log.info(`LinuxInputBridge: attached evdev ${devPath} (${name})`)
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    const parseSteamDeckHid = (buf, len) => {
+      if (len < 64 || buf[0] !== 0x01 || buf[2] !== 0x09) return false
+      const b8 = buf[8]
+      const b9 = buf[9]
+      const b10 = buf[10]
+      const b11 = buf[11]
+      const b13 = buf[13]
+      let btns = 0
+      if (b8 & 0x80) btns |= 0x1000 // A
+      if (b8 & 0x20) btns |= 0x2000 // B
+      if (b8 & 0x40) btns |= 0x4000 // X
+      if (b8 & 0x10) btns |= 0x8000 // Y
+      if (b8 & 0x08) btns |= 0x0100 // L1 (LB)
+      if (b8 & 0x04) btns |= 0x0200 // R1 (RB)
+      if (b9 & 0x01) btns |= 0x0001 // D-Pad Up
+      if (b9 & 0x08) btns |= 0x0002 // D-Pad Down
+      if (b9 & 0x04) btns |= 0x0004 // D-Pad Left
+      if (b9 & 0x02) btns |= 0x0008 // D-Pad Right
+      if (b9 & 0x10) btns |= 0x0020 // Select / View (Back)
+      if (b9 & 0x40) btns |= 0x0010 // Start / Menu
+      if (b9 & 0x20) btns |= 0x0400 // Steam / Guide
+      if ((b10 & 0x40) || (b9 & 0x80) || (b13 & 0x02)) btns |= 0x0040 // L3 (ou L4/L5)
+      if ((b11 & 0x04) || (b10 & 0x01) || (b13 & 0x04)) btns |= 0x0080 // R3 (ou R4/R5)
+
+      state.buttons = btns
+      state.lx = buf.readInt16LE(48)
+      state.ly = buf.readInt16LE(50)
+      state.rx = buf.readInt16LE(52)
+      state.ry = buf.readInt16LE(54)
+
+      const rawLt = buf.readUInt16LE(44)
+      const rawRt = buf.readUInt16LE(46)
+      state.lt = (b8 & 0x02) ? 255 : Math.min(255, rawLt >> 7)
+      state.rt = (b8 & 0x01) ? 255 : Math.min(255, rawRt >> 7)
+      state.active = true
+      return true
+    }
+
+    const setBit = (mask, on) => {
+      if (on) state.buttons |= mask
+      else state.buttons &= ~mask
+    }
+
+    const parseJoydev = (buf, len) => {
+      let updated = false
+      for (let off = 0; off + 8 <= len; off += 8) {
+        const value = buf.readInt16LE(off + 4)
+        const type = buf[off + 6] & ~0x80
+        const num = buf[off + 7]
+        if (type === 1) { // JS_EVENT_BUTTON
+          const pressed = value !== 0
+          if (num === 0) setBit(0x1000, pressed)      // A
+          else if (num === 1) setBit(0x2000, pressed) // B
+          else if (num === 2) setBit(0x4000, pressed) // X
+          else if (num === 3) setBit(0x8000, pressed) // Y
+          else if (num === 4) setBit(0x0100, pressed) // LB
+          else if (num === 5) setBit(0x0200, pressed) // RB
+          else if (num === 6) setBit(0x0020, pressed) // Back
+          else if (num === 7) setBit(0x0010, pressed) // Start
+          else if (num === 8) setBit(0x0400, pressed) // Guide
+          else if (num === 9) setBit(0x0040, pressed) // L3
+          else if (num === 10) setBit(0x0080, pressed)// R3
+          else if (num === 11) setBit(0x0001, pressed)// D-Up
+          else if (num === 12) setBit(0x0002, pressed)// D-Down
+          else if (num === 13) setBit(0x0004, pressed)// D-Left
+          else if (num === 14) setBit(0x0008, pressed)// D-Right
+          updated = true
+        } else if (type === 2) { // JS_EVENT_AXIS
+          if (num === 0) state.lx = value
+          else if (num === 1) state.ly = Math.max(-32768, Math.min(32767, -value))
+          else if (num === 2) state.lt = Math.min(255, Math.max(0, (value + 32767) >> 8))
+          else if (num === 3) state.rx = value
+          else if (num === 4) state.ry = Math.max(-32768, Math.min(32767, -value))
+          else if (num === 5) state.rt = Math.min(255, Math.max(0, (value + 32767) >> 8))
+          else if (num === 6) {
+            setBit(0x0004, value < -8000)
+            setBit(0x0008, value > 8000)
+          } else if (num === 7) {
+            setBit(0x0001, value < -8000)
+            setBit(0x0002, value > 8000)
+          }
+          updated = true
+        }
+      }
+      if (updated) state.active = true
+      return updated
+    }
+
+    const parseEvdev = (buf, len) => {
+      // 64-bit Linux input_event: 16 bytes timeval + 2 bytes type + 2 bytes code + 4 bytes value = 24 bytes
+      let updated = false
+      for (let off = 0; off + 24 <= len; off += 24) {
+        const type = buf.readUInt16LE(off + 16)
+        const code = buf.readUInt16LE(off + 18)
+        const val = buf.readInt32LE(off + 20)
+        if (type === 1) { // EV_KEY
+          const p = val !== 0
+          if (code === 304) setBit(0x1000, p)      // BTN_SOUTH (A)
+          else if (code === 305) setBit(0x2000, p) // BTN_EAST (B)
+          else if (code === 307) setBit(0x4000, p) // BTN_NORTH (X)
+          else if (code === 308) setBit(0x8000, p) // BTN_WEST (Y)
+          else if (code === 310) setBit(0x0100, p) // BTN_TL (LB)
+          else if (code === 311) setBit(0x0200, p) // BTN_TR (RB)
+          else if (code === 312) state.lt = p ? 255 : 0
+          else if (code === 313) state.rt = p ? 255 : 0
+          else if (code === 314) setBit(0x0020, p) // BTN_SELECT
+          else if (code === 315) setBit(0x0010, p) // BTN_START
+          else if (code === 316) setBit(0x0400, p) // BTN_MODE
+          else if (code === 317) setBit(0x0040, p) // BTN_THUMBL
+          else if (code === 318) setBit(0x0080, p) // BTN_THUMBR
+          else if (code === 544) setBit(0x0001, p) // BTN_DPAD_UP
+          else if (code === 545) setBit(0x0002, p) // BTN_DPAD_DOWN
+          else if (code === 546) setBit(0x0004, p) // BTN_DPAD_LEFT
+          else if (code === 547) setBit(0x0008, p) // BTN_DPAD_RIGHT
+          updated = true
+        } else if (type === 3) { // EV_ABS
+          if (code === 0) state.lx = val
+          else if (code === 1) state.ly = Math.max(-32768, Math.min(32767, -val))
+          else if (code === 3) state.rx = val
+          else if (code === 4) state.ry = Math.max(-32768, Math.min(32767, -val))
+          else if (code === 2 || code === 10) state.lt = Math.min(255, Math.max(0, val > 255 ? (val >> 7) : val))
+          else if (code === 5 || code === 9) state.rt = Math.min(255, Math.max(0, val > 255 ? (val >> 7) : val))
+          else if (code === 16) {
+            setBit(0x0004, val < 0)
+            setBit(0x0008, val > 0)
+          } else if (code === 17) {
+            setBit(0x0001, val < 0)
+            setBit(0x0002, val > 0)
+          }
+          updated = true
+        }
+      }
+      if (updated) state.active = true
+      return updated
+    }
+
+    scanDevices()
+    let tick = 0
+    const timer = setInterval(() => {
+      tick++
+      if (tick % 120 === 0) scanDevices()
+      let anyChange = false
+      for (const [devPath, info] of fds.entries()) {
+        try {
+          for (let reads = 0; reads < 16; reads++) {
+            const n = fs.readSync(info.fd, readBuf, 0, readBuf.length, null)
+            if (n <= 0) break
+            if (info.type === 'steamdeck-hidraw') {
+              if (parseSteamDeckHid(readBuf, n)) anyChange = true
+            } else if (info.type === 'joydev') {
+              if (parseJoydev(readBuf, n)) anyChange = true
+            } else if (info.type === 'evdev') {
+              if (parseEvdev(readBuf, n)) anyChange = true
+            }
+          }
+        } catch (err) {
+          if (err.code !== 'EAGAIN' && err.code !== 'EWOULDBLOCK') {
+            try { fs.closeSync(info.fd) } catch {}
+            fds.delete(devPath)
+          }
+        }
+      }
+      if (anyChange || (state.active && tick % 4 === 0) || (fds.size > 0 && tick % 16 === 0)) {
+        writeState()
+      }
+    }, 12)
+    timer.unref?.()
+
+    if (parentChild) {
+      parentChild.once('exit', () => {
+        clearInterval(timer)
+        for (const info of fds.values()) {
+          try { fs.closeSync(info.fd) } catch {}
+        }
+        fds.clear()
+        try { fs.unlinkSync(shmPath) } catch {}
+        try { fs.unlinkSync(fallbackPath) } catch {}
+      })
+    }
+  }
+
+  /**
    * SoderPad.exe turns a controller into keys for the 3.3.5a client.
    * Runs natively on Windows and through Wine on Linux/SteamOS.
    */
   #startControllerReader(dir, command, env, parentChild) {
     let reader = path.join(dir, 'SoderPad.exe')
-    if (!fs.existsSync(reader)) {
-      const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
-      if (fs.existsSync(bundled)) {
-        try { fs.copyFileSync(bundled, reader) } catch (e) { log.warn('could not copy bundled SoderPad.exe', e.message) }
-      }
+    const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
+    if (fs.existsSync(bundled)) {
+      try { fs.copyFileSync(bundled, reader) } catch (e) { log.warn('could not copy bundled SoderPad.exe', e.message) }
     }
     if (!fs.existsSync(reader)) return
+    if (this.platform !== 'win32') {
+      this.#startLinuxInputBridge(dir, parentChild)
+    }
     try {
       const spawnCmd = this.platform === 'win32' ? reader : command
       const spawnArgs = this.platform === 'win32' ? [] : [reader]
@@ -126,12 +399,15 @@ class GameLauncher {
       }
     }
 
-    // Garante que o patch-Z.MPQ de auto-login e stubs de Cinematics seja injetado em Data/ e Data/<locale>/
+    // Garante que o patch-Z.MPQ de auto-login e stubs de Cinematics seja atualizado apenas se não for o patch-Z customizado (> 100 KB)
     const bundledMpq = path.join(__dirname, '..', 'bin', 'patch-Z.MPQ')
     if (fs.existsSync(bundledMpq)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true })
-        fs.copyFileSync(bundledMpq, path.join(dataDir, 'patch-Z.MPQ'))
+        const dataMpq = path.join(dataDir, 'patch-Z.MPQ')
+        if (!fs.existsSync(dataMpq) || fs.statSync(dataMpq).size <= 100000) {
+          fs.copyFileSync(bundledMpq, dataMpq)
+        }
       } catch (e) {
         log.warn('could not copy patch-Z.MPQ to Data', e.message)
       }
@@ -139,18 +415,37 @@ class GameLauncher {
         const locDir = path.join(dataDir, loc)
         if (fs.existsSync(locDir)) {
           try {
-            fs.copyFileSync(bundledMpq, path.join(locDir, `patch-${loc}-Z.MPQ`))
+            const locMpq = path.join(locDir, `patch-${loc}-Z.MPQ`)
+            if (!fs.existsSync(locMpq) || fs.statSync(locMpq).size <= 100000) {
+              fs.copyFileSync(bundledMpq, locMpq)
+            }
           } catch {}
         }
       }
     }
 
-    // No Linux / Steam Deck: elimina ponte.c proxy que trava o loader do Wine e sequestra mouse
+    const onDeck = isSteamDeck()
+
+    // No Linux / Steam Deck: elimina ponte.c proxy e evita o deadlock de apresentação em primeiro plano do DXVK 3.1.1-git no SteamOS
     if (this.platform !== 'win32') {
       try {
         const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
         const d3d9Current = path.join(dir, 'd3d9.dll')
-        if (fs.existsSync(d3d9Current)) {
+        const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
+        if (onDeck) {
+          // No SteamOS (Gamescope / KWin XWayland), o d3d9_orig.dll (DXVK v3.1.1-41-g5cbf10835 experimental com VK_EXT_present_timing)
+          // entra em deadlock de swapchain assim que a janela recebe foco em primeiro plano, só destravando quando vai para background.
+          // Usar o wined3d nativo do Wine (OpenGL 4.6 radeonsi) elimina 100% o congelamento em primeiro plano no Steam Deck.
+          if (fs.existsSync(d3d9Current)) {
+            const curSize = fs.statSync(d3d9Current).size
+            if (curSize > 500000 && !fs.existsSync(d3d9Bak)) {
+              fs.renameSync(d3d9Current, d3d9Bak)
+            } else {
+              fs.unlinkSync(d3d9Current)
+            }
+            log.info('SteamOS detected: disabled experimental DXVK d3d9.dll in favor of Wine native wined3d (radeonsi) to prevent foreground freeze')
+          }
+        } else if (fs.existsSync(d3d9Current)) {
           const curSize = fs.statSync(d3d9Current).size
           if (curSize < 100000) {
             // É a ponte.c (17 KB): trava no loader do Wine ao chamar CreateThread dentro de DllMain
@@ -189,21 +484,33 @@ class GameLauncher {
         } catch {}
       }
 
-      // Desativa Gamescope WSI que causa deadlock de tela preta ao inicializar o Vulkan no Steam Deck
+      // Desativa bloqueios de VSync / Direct Scanout / Present Wait no Gamescope, KWin, Mesa e DXVK
       env.ENABLE_GAMESCOPE_WSI = '0'
+      env.vblank_mode = '0'
+      env.__GL_SYNC_TO_VBLANK = '0'
+      env.MESA_VK_WSI_PRESENT_MODE = 'immediate'
+      env.KWIN_X11_NO_SYNC_TO_VBLANK = '1'
+      env.KWIN_DRM_NO_DIRECT_SCANOUT = '1'
+      env.SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS = '0'
+      env.SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD = '1'
 
-      // Linux / Steam Deck: força DXVK a apresentar imediatamente sem deferir superfície
-      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;dxgi.syncInterval=1'
+      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=0;dxgi.syncInterval=0;dxvk.tearFree=False;dxvk.enablePresentTiming=False;dxvk.latencySleep=False;dxvk.allowFse=False;d3d9.maxFrameLatency=3;d3d9.maxFrameRate=60;dxvk.numCompilerThreads=2'
       try {
         const dxvkConf = path.join(dir, 'dxvk.conf')
-        if (fs.existsSync(dxvkConf)) {
-          let conf = fs.readFileSync(dxvkConf, 'utf8')
-          conf = conf.replace(/d3d9\.deferSurfaceCreation\s*=\s*\w+/gi, 'd3d9.deferSurfaceCreation = False')
-          if (!conf.includes('d3d9.deferSurfaceCreation')) {
-            conf += '\nd3d9.deferSurfaceCreation = False\n'
-          }
-          fs.writeFileSync(dxvkConf, conf)
-        }
+        const safeDxvkConf = [
+          'd3d9.deferSurfaceCreation = False',
+          'd3d9.presentInterval = 0',
+          'dxgi.syncInterval = 0',
+          'dxvk.tearFree = False',
+          'dxvk.enablePresentTiming = False',
+          'dxvk.latencySleep = False',
+          'dxvk.allowFse = False',
+          'd3d9.maxFrameLatency = 3',
+          'd3d9.maxFrameRate = 60',
+          'dxvk.numCompilerThreads = 2',
+          '',
+        ].join('\n')
+        fs.writeFileSync(dxvkConf, safeDxvkConf, 'utf8')
       } catch {}
 
       // Se /opt/reshade não existir (como no Steam Deck), desativa vkBasalt para evitar crash/tela preta no Vulkan
@@ -226,16 +533,23 @@ class GameLauncher {
       const wineBinDir = path.dirname(wine.path)
       const wineRootDir = path.dirname(wineBinDir)
       const wineLibDir = path.join(wineRootDir, 'lib')
+      const wineLib64Dir = path.join(wineRootDir, 'lib64')
       env.PATH = `${wineBinDir}:${env.PATH || ''}`
       // Nunca prependa /usr/lib em LD_LIBRARY_PATH (no Arch/SteamOS é 64-bit e quebra loaders 32-bit de Vulkan/Mesa)
       if (!wine.path.startsWith('/usr/bin/')) {
-        env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
+        const libs = [wineLib64Dir, wineLibDir].filter((p) => fs.existsSync(p))
+        if (libs.length) {
+          env.LD_LIBRARY_PATH = `${libs.join(':')}:${env.LD_LIBRARY_PATH || ''}`
+        }
       }
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
-      // The package ships DXVK (d3d9.dll/dxgi.dll): make Wine prefer them.
-      env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'd3d9,dxgi=n,b'
+      if (onDeck) {
+        env.WINEDLLOVERRIDES = 'd3d9=b;dxgi=n,b'
+      } else {
+        env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'd3d9,dxgi=n,b'
+      }
       // First run: create the prefix before starting the game (racing wineboot breaks RpcSs).
       if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')
