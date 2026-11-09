@@ -104,7 +104,7 @@ class GameLauncher {
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
     try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
 
-    const glueFiles = ['AccountLogin.lua']
+    const glueFiles = ['AccountLogin.lua', 'CinematicsFrame.lua']
     for (const f of glueFiles) {
       const src = path.join(__dirname, '..', 'bin', f)
       if (fs.existsSync(src)) {
@@ -157,22 +157,18 @@ class GameLauncher {
         log.warn('could not sanitize d3d9 proxy', e.message)
       }
 
-      // Somente no Steam Deck/Gamescope: desativa deferSurfaceCreation se necessario
-      const isDeck = process.env.STEAM_DECK === '1' || process.env.SteamOS === '1' || (() => {
-        try { return /Jupiter|Galileo/i.test(fs.readFileSync('/sys/devices/virtual/dmi/id/product_name', 'utf8')) } catch { return false }
-      })()
-      if (isDeck) {
-        try {
-          const dxvkConf = path.join(dir, 'dxvk.conf')
-          if (fs.existsSync(dxvkConf)) {
-            let conf = fs.readFileSync(dxvkConf, 'utf8')
-            if (conf.includes('d3d9.deferSurfaceCreation = True')) {
-              conf = conf.replace('d3d9.deferSurfaceCreation = True', 'd3d9.deferSurfaceCreation = False')
-              fs.writeFileSync(dxvkConf, conf)
-            }
+      // Linux / Steam Deck: nunca defira surface creation no DXVK (evita tela preta aguardando exposicao de janela no Gamescope)
+      env.DXVK_CONFIG = `${env.DXVK_CONFIG ? env.DXVK_CONFIG + ';' : ''}d3d9.deferSurfaceCreation=False`
+      try {
+        const dxvkConf = path.join(dir, 'dxvk.conf')
+        if (fs.existsSync(dxvkConf)) {
+          let conf = fs.readFileSync(dxvkConf, 'utf8')
+          if (/d3d9\.deferSurfaceCreation\s*=\s*(?:True|true|1)/i.test(conf)) {
+            conf = conf.replace(/d3d9\.deferSurfaceCreation\s*=\s*(?:True|true|1)/gi, 'd3d9.deferSurfaceCreation = False')
+            fs.writeFileSync(dxvkConf, conf)
           }
-        } catch {}
-      }
+        }
+      } catch {}
 
       // Se /opt/reshade não existir (como no Steam Deck), desativa vkBasalt para evitar crash/tela preta no Vulkan
       if (!fs.existsSync('/opt/reshade/shaders')) {

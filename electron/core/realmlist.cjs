@@ -75,7 +75,8 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     ['readEULA', '1'],
     ['readTerminationWithoutNotice', '1'],
     ['readScanning', '1'],
-    ['readContest', '1']
+    ['readContest', '1'],
+    ['scriptErrors', '0']
   ]
   for (const [k, v] of commonOpts) {
     const line = `SET ${k} "${v}"`

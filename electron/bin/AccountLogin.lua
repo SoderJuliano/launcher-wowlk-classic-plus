@@ -1,3 +1,26 @@
+-- Silencia diálogos modais de erro de script no Glue para não travar a interface nem controles no Steam Deck/PC
+pcall(function()
+	if seterrorhandler then
+		seterrorhandler(function(err) end)
+	end
+	_ERRORMESSAGE = function(msg) end
+end)
+
+-- Stubs defensivos universais para CinematicsFrame e MovieFrame (evita telas pretas e popups de erro no Wine/Steam Deck)
+if not CinematicsFrame_OnLoad then function CinematicsFrame_OnLoad(self) if self and self.Hide then pcall(function() self:Hide() end) end end end
+if not CinematicsFrame_OnShow then function CinematicsFrame_OnShow(self) if self and self.Hide then pcall(function() self:Hide() end) end end end
+if not CinematicsFrame_OnKeyDown then function CinematicsFrame_OnKeyDown(key) if CinematicsFrame and CinematicsFrame.Hide then pcall(function() CinematicsFrame:Hide() end) end end end
+if not CinematicsFrameCloseDialogResumeButton_OnClick then function CinematicsFrameCloseDialogResumeButton_OnClick() end end
+if not CinematicsFrameCloseDialogLeaveButton_OnClick then function CinematicsFrameCloseDialogLeaveButton_OnClick() end end
+if not CinematicFrame_OnLoad then function CinematicFrame_OnLoad(self) end end
+if not CinematicFrame_OnShow then function CinematicFrame_OnShow(self) end end
+if not CinematicFrame_OnKeyDown then function CinematicFrame_OnKeyDown(key) end end
+if not MovieFrame_OnLoad then function MovieFrame_OnLoad(self) end end
+if not MovieFrame_OnShow then function MovieFrame_OnShow(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
+if not MovieFrame_PlayMovie then function MovieFrame_PlayMovie(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
+if not MovieFrame_OnKeyUp then function MovieFrame_OnKeyUp(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
+if not MovieFrame_OnKeyDown then function MovieFrame_OnKeyDown(self) if self and self.StopMovie then pcall(function() self:StopMovie() end) end if self and self.Hide then pcall(function() self:Hide() end) end end end
+
 FADE_IN_TIME = 2;
 DEFAULT_TOOLTIP_COLOR = {0.8, 0.8, 0.8, 0.09, 0.09, 0.09};
 MAX_PIN_LENGTH = 10;
