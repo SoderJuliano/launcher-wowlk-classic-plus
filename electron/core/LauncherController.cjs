@@ -279,7 +279,7 @@ class LauncherController {
     }
     try {
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
-      const r = await this.game.launch(id, { onExit: () => this.#publish(), credentials })
+      const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials })
       this.#publish()
       return r
     } catch (err) {

@@ -41,7 +41,12 @@ function createServices() {
   const selfUpdater = new LauncherSelfUpdater({ config, api, manifests, downloader, launcherVersion: VERSION })
   controller = new LauncherController({
     config, api, auth, manifests, downloader, installer, updater, game, selfUpdater,
-    emit: (channel, payload) => win?.webContents.send(`olk:${channel}`, payload)
+    emit: (channel, payload) => {
+      win?.webContents.send(`olk:${channel}`, payload)
+      if (channel === 'game-exit') {
+        try { if (win?.isMinimized()) win.restore(); win?.focus() } catch {}
+      }
+    }
   })
 }
 
@@ -117,7 +122,11 @@ function registerIpc() {
   handle('update', (id) => controller.update(String(id)))
   handle('repair', (id) => controller.update(String(id), { repair: true }))
   handle('cancel', () => controller.cancel())
-  handle('play', (id) => controller.play(String(id)))
+  handle('play', async (id) => {
+    const res = await controller.play(String(id))
+    try { win?.minimize() } catch {}
+    return res
+  })
   handle('installWine', () => controller.installWine())
   handle('detectWineCandidates', () => controller.detectWineCandidates())
   handle('resetWinePrefix', () => controller.resetWinePrefix())

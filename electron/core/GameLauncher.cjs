@@ -11,6 +11,7 @@ const { spawn, execFile } = require('node:child_process')
 const { LauncherError } = require('./errors.cjs')
 const { resolveInside } = require('./pathSafety.cjs')
 const platform = require('./PlatformService.cjs')
+const { isSteamDeck } = require('./realmlist.cjs')
 const log = require('./logger.cjs')
 
 class GameLauncher {
@@ -35,12 +36,10 @@ class GameLauncher {
   }
 
   /**
-   * SoderPad.exe turns a controller into keys for the 3.3.5a client on Windows.
-   * On Linux / Steam Deck, Steam Input provides native controller emulation;
-   * running SoderPad under Wine causes axis conflicts, mouse locking, and vkBasalt F11 stalls.
+   * SoderPad.exe turns a controller into keys for the 3.3.5a client.
+   * Runs natively on Windows and through Wine on Linux/SteamOS.
    */
-  #startControllerReader(dir, command, env) {
-    if (this.platform !== 'win32') return
+  #startControllerReader(dir, command, env, parentChild) {
     let reader = path.join(dir, 'SoderPad.exe')
     if (!fs.existsSync(reader)) {
       const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
@@ -50,11 +49,22 @@ class GameLauncher {
     }
     if (!fs.existsSync(reader)) return
     try {
-      const proc = this.spawn(reader, [], {
+      const spawnCmd = this.platform === 'win32' ? reader : command
+      const spawnArgs = this.platform === 'win32' ? [] : [reader]
+      const proc = this.spawn(spawnCmd, spawnArgs, {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`controller reader did not start: ${err.message}`))
+      if (parentChild) {
+        parentChild.once('exit', () => {
+          try { proc.kill() } catch {}
+          if (this.platform !== 'win32') {
+            try { this.spawn('pkill', ['-9', '-f', 'SoderPad.exe'], { stdio: 'ignore' }) } catch {}
+          }
+        })
+      }
       proc.unref()
+      log.info('SoderPad controller reader started successfully')
     } catch (err) {
       log.warn(`controller reader did not start: ${err.message}`)
     }
@@ -157,16 +167,42 @@ class GameLauncher {
         log.warn('could not sanitize d3d9 proxy', e.message)
       }
 
-      // Linux / Steam Deck: nunca defira surface creation no DXVK (evita tela preta aguardando exposicao de janela no Gamescope)
-      env.DXVK_CONFIG = `${env.DXVK_CONFIG ? env.DXVK_CONFIG + ';' : ''}d3d9.deferSurfaceCreation=False`
+      // Neutraliza vídeos AVI soltos em Data/<locale>/Interface/Cinematics (Wine no Steam Deck trava na decodificação de AVI gerando tela preta)
+      for (const loc of ['enUS', 'esES', 'ptBR', 'deDE', 'frFR', 'ruRU']) {
+        const cinDir = path.join(dataDir, loc, 'Interface', 'Cinematics')
+        if (fs.existsSync(cinDir)) {
+          try {
+            const cinBak = path.join(dataDir, loc, 'Interface', 'Cinematics.disabled')
+            if (!fs.existsSync(cinBak)) {
+              fs.renameSync(cinDir, cinBak)
+              log.info(`Disabled loose AVI cinematics for ${loc} to prevent Wine video hang`)
+            }
+          } catch (e) {
+            log.warn('could not rename Cinematics dir', e.message)
+          }
+        }
+      }
+      const rootCin = path.join(dir, 'Interface', 'Cinematics')
+      if (fs.existsSync(rootCin)) {
+        try {
+          fs.renameSync(rootCin, path.join(dir, 'Interface', 'Cinematics.disabled'))
+        } catch {}
+      }
+
+      // Desativa Gamescope WSI que causa deadlock de tela preta ao inicializar o Vulkan no Steam Deck
+      env.ENABLE_GAMESCOPE_WSI = '0'
+
+      // Linux / Steam Deck: força DXVK a apresentar imediatamente sem deferir superfície
+      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;dxgi.syncInterval=1'
       try {
         const dxvkConf = path.join(dir, 'dxvk.conf')
         if (fs.existsSync(dxvkConf)) {
           let conf = fs.readFileSync(dxvkConf, 'utf8')
-          if (/d3d9\.deferSurfaceCreation\s*=\s*(?:True|true|1)/i.test(conf)) {
-            conf = conf.replace(/d3d9\.deferSurfaceCreation\s*=\s*(?:True|true|1)/gi, 'd3d9.deferSurfaceCreation = False')
-            fs.writeFileSync(dxvkConf, conf)
+          conf = conf.replace(/d3d9\.deferSurfaceCreation\s*=\s*\w+/gi, 'd3d9.deferSurfaceCreation = False')
+          if (!conf.includes('d3d9.deferSurfaceCreation')) {
+            conf += '\nd3d9.deferSurfaceCreation = False\n'
           }
+          fs.writeFileSync(dxvkConf, conf)
         }
       } catch {}
 
@@ -225,14 +261,7 @@ class GameLauncher {
       onExit?.(code)
     })
     child.unref()
-    if (this.platform !== 'win32') {
-      try { this.spawn('pkill', ['-9', '-f', 'SoderPad.exe'], { stdio: 'ignore' }) } catch {}
-      const stalePad = path.join(dir, 'SoderPad.exe')
-      if (fs.existsSync(stalePad)) {
-        try { fs.unlinkSync(stalePad) } catch {}
-      }
-    }
-    this.#startControllerReader(dir, command, env)
+    this.#startControllerReader(dir, command, env, child)
     this.#startAutoLogin(dir, command, env, credentials?.password)
     return { pid: child.pid, command: path.basename(command) }
   }

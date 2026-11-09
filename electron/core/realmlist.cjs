@@ -12,11 +12,17 @@ const { LauncherError } = require('./errors.cjs')
 const REALM_RE = /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/
 
 function isSteamDeck() {
-  if (process.env.STEAM_DECK === '1' || process.env.SteamOS === '1') return true
-  try {
-    const prod = fs.readFileSync('/sys/devices/virtual/dmi/id/product_name', 'utf8')
-    if (/Jupiter|Galileo/i.test(prod)) return true
-  } catch {}
+  if (process.env.STEAM_DECK === '1' || process.env.SteamDeck === '1' || process.env.SteamOS === '1') return true
+  if (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || !!process.env.GAMESCOPE_WAYLAND_DISPLAY) return true
+  if (process.env.USER === 'deck' || fs.existsSync('/home/deck')) return true
+  for (const p of ['/sys/devices/virtual/dmi/id/product_name', '/sys/class/dmi/id/product_name']) {
+    try {
+      if (fs.existsSync(p)) {
+        const prod = fs.readFileSync(p, 'utf8')
+        if (/Jupiter|Galileo/i.test(prod)) return true
+      }
+    } catch {}
+  }
   return false
 }
 
@@ -91,7 +97,8 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
       ['gxMaximize', '1'],
       ['windowResizeLock', '1'],
       ['gxCursor', '1'],
-      ['gxMultisample', '0']
+      ['gxMultisample', '0'],
+      ['timingMethod', '0']
     ]
     for (const [k, v] of deckOpts) {
       const line = `SET ${k} "${v}"`
@@ -111,4 +118,4 @@ function readRealmlist(gameDir, locale) {
   } catch { return null }
 }
 
-module.exports = { applyRealmlist, readRealmlist, detectLocales, REALM_RE }
+module.exports = { applyRealmlist, readRealmlist, detectLocales, isSteamDeck, REALM_RE }
