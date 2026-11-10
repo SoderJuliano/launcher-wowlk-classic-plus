@@ -178,6 +178,7 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
     '/usr/local/bin/wine',
     '/opt/wine-staging/bin/wine',
     '/opt/wine/bin/wine',
+    ...findSteamProtonWineCandidates(),
     ...findThirdPartyWineCandidates()
   ].filter(Boolean)
   for (const c of candidates) {
