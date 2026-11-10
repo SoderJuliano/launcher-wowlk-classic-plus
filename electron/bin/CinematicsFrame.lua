@@ -35,14 +35,10 @@ function MovieFrame_OnLoad(self) end
 function MovieFrame_OnShow(self)
 	if self and self.StopMovie then pcall(function() self:StopMovie() end) end
 	if self and self.Hide then pcall(function() self:Hide() end) end
-	pcall(function() SetGlueScreen("login") end)
-	pcall(function() ShowCursor() end)
 end
 function MovieFrame_PlayMovie(self)
 	if self and self.StopMovie then pcall(function() self:StopMovie() end) end
 	if self and self.Hide then pcall(function() self:Hide() end) end
-	pcall(function() SetGlueScreen("login") end)
-	pcall(function() ShowCursor() end)
 end
 function MovieFrame_OnKeyUp(self)
 	if self and self.StopMovie then pcall(function() self:StopMovie() end) end

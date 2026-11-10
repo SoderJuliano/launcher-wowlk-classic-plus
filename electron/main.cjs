@@ -27,6 +27,7 @@ const { UpdateManager } = require('./core/UpdateManager.cjs')
 const { GameLauncher } = require('./core/GameLauncher.cjs')
 const { LauncherSelfUpdater } = require('./core/LauncherSelfUpdater.cjs')
 const { LauncherController } = require('./core/LauncherController.cjs')
+const { isSteamDeck } = require('./core/realmlist.cjs')
 
 // Isolated data dir for automated end-to-end runs.
 if (process.env.OLK_USER_DATA) app.setPath('userData', process.env.OLK_USER_DATA)
@@ -38,6 +39,7 @@ if (!app.requestSingleInstanceLock()) app.quit()
 
 let win = null
 let controller = null
+let gameLauncher = null
 
 function createServices() {
   const dataDir = app.getPath('userData')
@@ -51,6 +53,7 @@ function createServices() {
   const installer = new InstallationManager({ config })
   const updater = new UpdateManager({ config, installer, downloader })
   const game = new GameLauncher({ config, installer })
+  gameLauncher = game
   const selfUpdater = new LauncherSelfUpdater({ config, api, manifests, downloader, launcherVersion: VERSION })
   controller = new LauncherController({
     config, api, auth, manifests, downloader, installer, updater, game, selfUpdater,
@@ -231,6 +234,26 @@ app.on('window-all-closed', () => {
   controller?.cancel()
   app.quit()
 })
+
+// Steam Deck: "Sair do jogo" pelo botão Steam (Modo Jogo) ou "Encerrar sessão" manda SIGTERM ao launcher.
+// O Wow.exe roda via Wine/Proton em processos detached; se o launcher sai sem derrubá-los, o SteamOS
+// fica preso em "saindo do jogo". Aqui encerramos jogo + wineserver + auxiliares e depois o launcher.
+if (process.platform === 'linux' && isSteamDeck()) {
+  let shuttingDown = false
+  const shutdownEverything = (reason) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    try { log.info(`Steam Deck shutdown requested (${reason}): closing game and launcher`) } catch {}
+    try { gameLauncher?.shutdownAllSync() } catch (err) { try { log.warn('shutdownAllSync failed', err?.message) } catch {} }
+  }
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(sig, () => {
+      shutdownEverything(sig)
+      app.exit(0)
+    })
+  }
+  app.on('before-quit', () => shutdownEverything('before-quit'))
+}
 
 app.whenReady().then(async () => {
   createServices()

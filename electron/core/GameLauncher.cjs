@@ -21,9 +21,47 @@ class GameLauncher {
     this.spawn = spawnImpl || spawn
     this.platform = platformName || platform.platform
     this.running = new Map() // clientId -> ChildProcess
+    this.sessions = new Map() // clientId -> { wineserver, winePrefix, env, exeName } (Linux only)
+    this.helperPids = new Set() // SoderPad.exe / digita.exe launched through Wine
   }
 
   isRunning(id) { return this.running.has(id) }
+
+  /**
+   * Encerra o jogo e todos os processos auxiliares de forma SÍNCRONA (pode ser chamado
+   * dentro de handlers de SIGTERM/SIGHUP, quando o event loop já não é confiável).
+   * Usado no Steam Deck quando o usuário escolhe "Sair do jogo" pelo botão Steam:
+   * o Steam manda SIGTERM ao launcher, e o Wine/Proton (processos detached) ficava órfão,
+   * travando o SteamOS em "saindo do jogo" eternamente.
+   */
+  shutdownAllSync({ graceMs = 1500 } = {}) {
+    if (this.platform === 'win32') return
+    const { spawnSync } = require('node:child_process')
+    const pids = [...[...this.running.values()].map((c) => c?.pid), ...this.helperPids].filter((p) => Number.isInteger(p) && p > 0)
+    const signalAll = (sig) => {
+      for (const pid of pids) {
+        try { process.kill(-pid, sig) } catch { try { process.kill(pid, sig) } catch {} }
+      }
+    }
+    log.info(`shutdownAllSync: terminating ${pids.length} game process group(s)`)
+    signalAll('SIGTERM')
+    for (const s of this.sessions.values()) {
+      try { spawnSync(s.wineserver, ['-k'], { env: { ...s.env, WINEPREFIX: s.winePrefix }, timeout: 4000, stdio: 'ignore' }) } catch {}
+    }
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, graceMs) } catch {}
+    signalAll('SIGKILL')
+    const names = new Set(['SoderPad.exe', 'digita.exe'])
+    for (const s of this.sessions.values()) {
+      if (s.exeName) names.add(s.exeName)
+      try { spawnSync(s.wineserver, ['-k9'], { env: { ...s.env, WINEPREFIX: s.winePrefix }, timeout: 3000, stdio: 'ignore' }) } catch {}
+    }
+    for (const n of names) {
+      try { spawnSync('pkill', ['-9', '-f', n], { timeout: 2000, stdio: 'ignore' }) } catch {}
+    }
+    this.running.clear()
+    this.sessions.clear()
+    this.helperPids.clear()
+  }
 
   #wineboot(winePath, env) {
     return new Promise((resolve, reject) => {
@@ -335,6 +373,7 @@ class GameLauncher {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`controller reader did not start: ${err.message}`))
+      if (proc.pid) { this.helperPids.add(proc.pid); proc.once('exit', () => this.helperPids.delete(proc.pid)) }
       if (parentChild) {
         parentChild.once('exit', () => {
           try { proc.kill() } catch {}
@@ -369,6 +408,7 @@ class GameLauncher {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
       proc.once('error', (err) => log.warn(`autologin did not start: ${err.message}`))
+      if (proc.pid) { this.helperPids.add(proc.pid); proc.once('exit', () => this.helperPids.delete(proc.pid)) }
       proc.unref()
     } catch (err) {
       log.warn(`autologin did not start: ${err.message}`)
@@ -393,7 +433,13 @@ class GameLauncher {
     const glueDir = path.join(dir, 'Interface', 'GlueXML')
     try { fs.mkdirSync(glueDir, { recursive: true }) } catch {}
 
-    const glueFiles = ['AccountLogin.lua', 'CinematicsFrame.lua', 'MovieFrame.lua', 'MovieFrame.xml']
+    // A v0.1.24 copiou MovieFrame.lua/.xml para Interface/GlueXML; esse override chamava
+    // SetGlueScreen("login") em OnShow/OnHide/OnUpdate e travava o boot do Glue. Remove os restos.
+    for (const stale of ['MovieFrame.lua', 'MovieFrame.xml']) {
+      try { fs.rmSync(path.join(glueDir, stale), { force: true }) } catch {}
+    }
+
+    const glueFiles = ['AccountLogin.lua', 'CinematicsFrame.lua']
     for (const f of glueFiles) {
       const src = path.join(__dirname, '..', 'bin', f)
       if (fs.existsSync(src)) {
@@ -450,19 +496,26 @@ class GameLauncher {
       }
     }
 
-    // No Linux / Steam Deck: move d3d9.dll experimental para .bak para usar o DXVK nativo do Proton/Wine
-    // evitando o deadlock de swapchain na apresentação em tela cheia do Gamescope/SteamOS
+    // No Linux / Steam Deck: restaura d3d9_orig.dll puro (DXVK) eliminando a ponte.c proxy (17 KB)
     if (this.platform !== 'win32') {
       try {
+        const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
         const d3d9Current = path.join(dir, 'd3d9.dll')
         const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
-        if (fs.existsSync(d3d9Current)) {
-          if (!fs.existsSync(d3d9Bak)) {
-            fs.renameSync(d3d9Current, d3d9Bak)
-            log.info('Moved local d3d9.dll to d3d9.dxvk.bak on Linux to use Proton/Wine stable builtin D3D9/DXVK')
-          } else {
-            fs.unlinkSync(d3d9Current)
+        if (fs.existsSync(d3d9Bak)) {
+          try {
+            if (!fs.existsSync(d3d9Current)) fs.renameSync(d3d9Bak, d3d9Current)
+            else fs.unlinkSync(d3d9Bak)
+          } catch {}
+        }
+        if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
+          if (!fs.existsSync(d3d9Current) || fs.statSync(d3d9Current).size < 100000) {
+            fs.copyFileSync(d3d9Orig, d3d9Current)
+            log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
           }
+        } else if (fs.existsSync(d3d9Current) && fs.statSync(d3d9Current).size < 100000) {
+          fs.unlinkSync(d3d9Current)
+          log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
         }
       } catch (e) {
         log.warn('could not sanitize d3d9 proxy', e.message)
@@ -568,9 +621,8 @@ class GameLauncher {
 
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
-      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
-      // e usa d3d9=b (builtin DXVK do Proton / builtin D3D9 do Wine) evitando deadlock do DXVK experimental em Wayland/Gamescope
-      env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9=b;dxgi=n,b'
+      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano
+      env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
       env.WINE_CRASH_REPORT_DIR = '/dev/null'
 
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
@@ -580,6 +632,20 @@ class GameLauncher {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')
         await this.#wineboot(wine.path, env)
       }
+
+      // Guarda onde está o wineserver e qual é o prefixo real, para conseguir derrubar
+      // todos os processos Wine quando o Steam (Modo Jogo) pedir para sair do jogo.
+      let wineserver = null
+      let winePrefix = prefix
+      if (wine.isProton && protonScript) {
+        const protonDir = path.dirname(protonScript)
+        wineserver = ['files/bin/wineserver', 'dist/bin/wineserver'].map((p) => path.join(protonDir, p)).find((p) => fs.existsSync(p)) || null
+        winePrefix = path.join(prefix, 'pfx') // Proton usa STEAM_COMPAT_DATA_PATH/pfx
+      } else {
+        const ws = path.join(path.dirname(wine.path), 'wineserver')
+        wineserver = fs.existsSync(ws) ? ws : null
+      }
+      this.sessions.set(id, { wineserver: wineserver || 'wineserver', winePrefix, env, exeName: path.basename(exe) })
     }
 
     log.info(`launching ${id}: ${command} ${args.join(' ')}`)
@@ -598,6 +664,7 @@ class GameLauncher {
     this.running.set(id, child)
     child.once('exit', (code) => {
       this.running.delete(id)
+      this.sessions.delete(id)
       log.info(`${id} exited with code ${code}`)
       onExit?.(code)
       if (this.platform !== 'win32') {
