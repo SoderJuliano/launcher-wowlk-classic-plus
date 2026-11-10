@@ -178,16 +178,13 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
     '/usr/local/bin/wine',
     '/opt/wine-staging/bin/wine',
     '/opt/wine/bin/wine',
-    ...findSteamProtonWineCandidates(),
     ...findThirdPartyWineCandidates()
   ].filter(Boolean)
   for (const c of candidates) {
     const version = await wineVersion(c)
     if (version) {
       const isInternal = c.includes('runtime/wine')
-      const isProton = /proton/i.test(c)
-      const protonScript = isProton ? findProtonScript(c) : null
-      return { needed: true, found: true, path: c, version, isInternal, isProton, protonScript }
+      return { needed: true, found: true, path: c, version, isInternal, isProton: false, protonScript: null }
     }
   }
   return { needed: true, found: false, path: null, version: null }

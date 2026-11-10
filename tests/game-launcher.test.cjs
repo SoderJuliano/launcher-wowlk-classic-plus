@@ -81,27 +81,25 @@ test('Linux path: uses internal wine runner fallback when available', async () =
   assert.ok(calls[0].opts.env.PATH.includes(internalWineDir))
 })
 
-test('Linux path: Proton runner executes with proton run and Steam environment', async () => {
+test('Linux path: Wine runner executes directly with game executable', async () => {
   const { config, installer, dir } = await installedClient()
-  const protonRoot = path.join(config.dataDir, 'Proton 9.0')
-  const protonBin = path.join(protonRoot, 'dist', 'bin')
-  fs.mkdirSync(protonBin, { recursive: true })
-  const mockWine = path.join(protonBin, 'wine')
-  const mockProton = path.join(protonRoot, 'proton')
+  const wineRoot = path.join(config.dataDir, 'custom-wine')
+  const wineBin = path.join(wineRoot, 'bin')
+  fs.mkdirSync(wineBin, { recursive: true })
+  const mockWine = path.join(wineBin, 'wine')
   fs.copyFileSync(process.execPath, mockWine)
-  fs.copyFileSync(process.execPath, mockProton)
   fs.chmodSync(mockWine, 0o755)
-  fs.chmodSync(mockProton, 0o755)
 
   config.update({ 'wine.path': mockWine })
+  fs.mkdirSync(path.join(config.dataDir, 'wineprefix', 'drive_c'), { recursive: true })
   const calls = []
   const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' }) }
   const launcher = new GameLauncher({ config, installer, spawnImpl, platformName: 'linux' })
   await launcher.launch('wow32')
-  assert.equal(calls[0].cmd, mockProton)
-  assert.deepEqual(calls[0].args, ['run', path.join(dir, 'Wow.exe')])
-  assert.ok(calls[0].opts.env.STEAM_COMPAT_DATA_PATH)
-  assert.ok(calls[0].opts.env.STEAM_COMPAT_CLIENT_INSTALL_PATH)
+  assert.equal(calls[0].cmd, mockWine)
+  assert.deepEqual(calls[0].args, [path.join(dir, 'Wow.exe')])
+  assert.ok(calls[0].opts.env.WINEPREFIX)
+  assert.equal(calls[0].opts.env.WINEDLLOVERRIDES, 'winedbg.exe=d;d3d9,dxgi=n,b')
 })
 
 test('real process start on this OS (copy of a system binary as Wow.exe)', { skip: process.platform !== 'win32' && 'Windows-only smoke test' }, async () => {

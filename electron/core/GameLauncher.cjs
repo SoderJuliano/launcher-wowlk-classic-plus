@@ -640,33 +640,19 @@ class GameLauncher {
       const prefix = cfg.wine.prefix || path.join(this.config.dataDir, 'wineprefix')
       fs.mkdirSync(prefix, { recursive: true })
 
-      const protonScript = wine.protonScript || (platform.findProtonScript ? platform.findProtonScript(wine.path) : null)
-      if (wine.isProton && protonScript) {
-        command = protonScript
-        defaultArgs = ['run']
-        args = ['run', exe]
-        env.STEAM_COMPAT_DATA_PATH = prefix
-        const steamDir = [
-          path.join(process.env.HOME || '/home/deck', '.local/share/Steam'),
-          path.join(process.env.HOME || '/home/deck', '.steam/steam'),
-          '/home/deck/.local/share/Steam'
-        ].find((p) => fs.existsSync(p)) || path.join(process.env.HOME || '', '.local/share/Steam')
-        env.STEAM_COMPAT_CLIENT_INSTALL_PATH = steamDir
-        log.info(`Using Proton runner: ${command} with prefix: ${prefix}`)
-      } else {
-        command = wine.path
-        defaultArgs = []
-        args = [exe]
+      command = wine.path
+      defaultArgs = []
+      args = [exe]
 
-        const wineBinDir = path.dirname(wine.path)
-        const wineRootDir = path.dirname(wineBinDir)
-        const wineLibDir = path.join(wineRootDir, 'lib')
-        env.PATH = `${wineBinDir}:${env.PATH || ''}`
-        // Nunca prependa /usr/lib ou lib64 em LD_LIBRARY_PATH de binário 32-bit
-        if (!wine.path.startsWith('/usr/bin/')) {
-          env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
-        }
+      const wineBinDir = path.dirname(wine.path)
+      const wineRootDir = path.dirname(wineBinDir)
+      const wineLibDir = path.join(wineRootDir, 'lib')
+      env.PATH = `${wineBinDir}:${env.PATH || ''}`
+      // Nunca prependa /usr/lib ou lib64 em LD_LIBRARY_PATH de binário 32-bit
+      if (!wine.path.startsWith('/usr/bin/')) {
+        env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
       }
+      log.info(`Using Wine runner: ${command} with prefix: ${prefix}`)
 
       // Limpa LD_PRELOAD de bibliotecas 64-bit da Steam que causam crash no Wine 32-bit
       if (env.LD_PRELOAD) {
@@ -675,56 +661,24 @@ class GameLauncher {
 
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
-      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano
+      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
+      // e garante que d3d9 use o DXVK da pasta do jogo
       env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
       env.WINE_CRASH_REPORT_DIR = '/dev/null'
-
-      // Steam Deck no MODO JOGO (Gamescope): roda exatamente como o Steam roda qualquer jogo Proton.
-      // O Modo Desktop (que funciona) continua igual. No Gamescope o d3d9.dll DXVK 3.1.1 da pasta do
-      // jogo + ENABLE_GAMESCOPE_WSI=0 + DXVK_CONFIG customizado dão tela preta travada; aqui o d3d9
-      // vem do DXVK do próprio Proton (já instalado no prefixo pelo `proton run`) e o WSI do Gamescope
-      // fica como o Steam configurou.
-      const gamingMode = isSteamDeck() && (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || !!process.env.GAMESCOPE_WAYLAND_DISPLAY)
-      if (gamingMode && wine.isProton && protonScript) {
-        try {
-          const d3d9Current = path.join(dir, 'd3d9.dll')
-          const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
-          if (fs.existsSync(d3d9Current)) {
-            fs.rmSync(d3d9Bak, { force: true })
-            fs.renameSync(d3d9Current, d3d9Bak) // o Modo Desktop restaura no próximo PLAY
-          }
-        } catch (e) { log.warn('gaming mode: could not park local d3d9.dll', e.message) }
-        env.WINEDLLOVERRIDES = 'winedbg.exe=d'
-        delete env.DXVK_CONFIG
-        if (process.env.ENABLE_GAMESCOPE_WSI !== undefined) env.ENABLE_GAMESCOPE_WSI = process.env.ENABLE_GAMESCOPE_WSI
-        else delete env.ENABLE_GAMESCOPE_WSI
-        delete env.KWIN_X11_NO_SYNC_TO_VBLANK
-        delete env.KWIN_DRM_NO_DIRECT_SCANOUT
-        try { fs.writeFileSync(path.join(dir, 'dxvk.conf'), 'd3d9.maxFrameRate = 60\n', 'utf8') } catch {}
-        log.info('Steam Deck gaming mode: using Proton built-in DXVK and Steam gamescope WSI defaults')
-      }
 
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
 
       // First run: create the prefix before starting the game (racing wineboot breaks RpcSs).
-      if (!wine.isProton && !fs.existsSync(path.join(prefix, 'drive_c'))) {
+      if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')
         await this.#wineboot(wine.path, env)
       }
 
       // Guarda onde está o wineserver e qual é o prefixo real, para conseguir derrubar
-      // todos os processos Wine quando o Steam (Modo Jogo) pedir para sair do jogo.
-      let wineserver = null
-      let winePrefix = prefix
-      if (wine.isProton && protonScript) {
-        const protonDir = path.dirname(protonScript)
-        wineserver = ['files/bin/wineserver', 'dist/bin/wineserver'].map((p) => path.join(protonDir, p)).find((p) => fs.existsSync(p)) || null
-        winePrefix = path.join(prefix, 'pfx') // Proton usa STEAM_COMPAT_DATA_PATH/pfx
-      } else {
-        const ws = path.join(path.dirname(wine.path), 'wineserver')
-        wineserver = fs.existsSync(ws) ? ws : null
-      }
-      this.sessions.set(id, { wineserver: wineserver || 'wineserver', winePrefix, env, exeName: path.basename(exe) })
+      // todos os processos Wine quando o Steam pedir para sair do jogo.
+      const ws = path.join(path.dirname(wine.path), 'wineserver')
+      const wineserver = fs.existsSync(ws) ? ws : 'wineserver'
+      this.sessions.set(id, { wineserver, winePrefix: prefix, env, exeName: path.basename(exe) })
     }
 
     // Um Wow.exe/wineserver travado de sessão anterior segura o prefixo: o novo Wow.exe conecta
