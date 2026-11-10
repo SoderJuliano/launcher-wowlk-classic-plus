@@ -10,6 +10,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { cmpVersion } = require('./ManifestService.cjs')
+const { isSteamDeck } = require('./realmlist.cjs')
+const { cleanEnvForSystemBinary } = require('./PlatformService.cjs')
 const log = require('./logger.cjs')
 
 class LauncherSelfUpdater {
@@ -39,6 +41,8 @@ class LauncherSelfUpdater {
    * @returns {Promise<{ updateAvailable: boolean, relaunching?: boolean, version?: string, devMode?: boolean }>}
    */
   async checkAndApplyUpdate({ onProgress, signal } = {}) {
+    // Já entregamos a sessão para a versão nova (filho): este processo antigo não verifica mais nada.
+    if (this.handedOff) return { updateAvailable: false, relaunching: true }
     let manifest
     try {
       manifest = await this.manifests.fetchLauncherManifest()
@@ -111,6 +115,15 @@ class LauncherSelfUpdater {
       fs.renameSync(tempDest, runningAppImage)
       log.info(`launcher updated to ${manifest.version}, relaunching ${runningAppImage}...`)
 
+      // Steam Deck / Big Picture / Modo Jogo: o Steam acompanha ESTE processo. Se ele sair
+      // (app.relaunch + exit), o Steam encerra a sessão e o novo launcher abre fora do Gamescope
+      // (tela preta, launcher nunca aparece). Então mantemos este processo vivo e escondido,
+      // rodando a versão nova como FILHO, e só saímos quando o filho sair.
+      if (isSteamDeck()) {
+        this.#relaunchAsChild(runningAppImage)
+        return { updateAvailable: true, relaunching: true, version: manifest.version }
+      }
+
       this.app.relaunch({ execPath: runningAppImage })
       this.app.exit(0)
       return { updateAvailable: true, relaunching: true, version: manifest.version }
@@ -125,6 +138,38 @@ class LauncherSelfUpdater {
     }
 
     return { updateAvailable: true, version: manifest.version }
+  }
+
+  /** Roda o AppImage novo como filho deste processo (que fica escondido) — ver comentário acima. */
+  #relaunchAsChild(appImagePath) {
+    this.handedOff = true
+    const env = cleanEnvForSystemBinary({ ...process.env })
+    for (const k of ['APPDIR', 'APPIMAGE', 'ARGV0', 'OWD']) delete env[k]
+    try { this.app.releaseSingleInstanceLock?.() } catch {}
+    try {
+      const { BrowserWindow } = require('electron')
+      for (const w of BrowserWindow.getAllWindows()) { try { w.hide() } catch {} }
+    } catch {}
+    let child
+    try {
+      child = spawn(appImagePath, [], { env, stdio: 'inherit', detached: false })
+    } catch (err) {
+      log.warn(`could not start updated launcher as child (${err.message}); falling back to relaunch`)
+      this.app.relaunch({ execPath: appImagePath })
+      this.app.exit(0)
+      return
+    }
+    const forward = (sig) => () => { try { child.kill(sig) } catch {} }
+    for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.prependListener(sig, forward(sig))
+    child.once('error', (err) => {
+      log.warn(`updated launcher failed to start: ${err.message}`)
+      this.app.exit(1)
+    })
+    child.once('exit', (code) => {
+      log.info(`updated launcher (child) exited with code ${code}; closing parent`)
+      this.app.exit(code ?? 0)
+    })
+    log.info(`updated launcher started as child pid ${child.pid} (Steam Deck session kept alive)`)
   }
 }
 

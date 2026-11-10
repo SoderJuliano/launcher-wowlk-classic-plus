@@ -35,7 +35,26 @@ if (process.env.OLK_USER_DATA) app.setPath('userData', process.env.OLK_USER_DATA
 const VERSION = app.getVersion()
 const isDev = !app.isPackaged && !!process.env.OLK_DEV_SERVER
 
-if (!app.requestSingleInstanceLock()) app.quit()
+function acquireSingleInstanceLock() {
+  if (app.requestSingleInstanceLock()) return true
+  // Steam Deck: a outra instância pode ser um launcher órfão invisível (fora do Gamescope),
+  // deixado pelo auto-update. Encerra e tenta de novo, em vez de fechar o PLAY da Steam.
+  if (process.platform !== 'linux' || !isSteamDeck()) return false
+  try {
+    const { findOtherLauncherPids } = require('./core/singleInstance.cjs')
+    const pids = findOtherLauncherPids()
+    const sleep = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } catch {} }
+    for (const pid of pids) { try { process.kill(pid, 'SIGTERM') } catch {} }
+    for (let i = 0; i < 20; i++) {
+      sleep(250)
+      if (app.requestSingleInstanceLock()) return true
+      if (i === 8) for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} }
+    }
+  } catch {}
+  return app.requestSingleInstanceLock()
+}
+
+if (!acquireSingleInstanceLock()) app.quit()
 
 let win = null
 let controller = null

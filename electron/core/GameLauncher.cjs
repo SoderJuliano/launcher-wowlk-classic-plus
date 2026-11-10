@@ -679,6 +679,31 @@ class GameLauncher {
       env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
       env.WINE_CRASH_REPORT_DIR = '/dev/null'
 
+      // Steam Deck no MODO JOGO (Gamescope): roda exatamente como o Steam roda qualquer jogo Proton.
+      // O Modo Desktop (que funciona) continua igual. No Gamescope o d3d9.dll DXVK 3.1.1 da pasta do
+      // jogo + ENABLE_GAMESCOPE_WSI=0 + DXVK_CONFIG customizado dão tela preta travada; aqui o d3d9
+      // vem do DXVK do próprio Proton (já instalado no prefixo pelo `proton run`) e o WSI do Gamescope
+      // fica como o Steam configurou.
+      const gamingMode = isSteamDeck() && (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || !!process.env.GAMESCOPE_WAYLAND_DISPLAY)
+      if (gamingMode && wine.isProton && protonScript) {
+        try {
+          const d3d9Current = path.join(dir, 'd3d9.dll')
+          const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
+          if (fs.existsSync(d3d9Current)) {
+            fs.rmSync(d3d9Bak, { force: true })
+            fs.renameSync(d3d9Current, d3d9Bak) // o Modo Desktop restaura no próximo PLAY
+          }
+        } catch (e) { log.warn('gaming mode: could not park local d3d9.dll', e.message) }
+        env.WINEDLLOVERRIDES = 'winedbg.exe=d'
+        delete env.DXVK_CONFIG
+        if (process.env.ENABLE_GAMESCOPE_WSI !== undefined) env.ENABLE_GAMESCOPE_WSI = process.env.ENABLE_GAMESCOPE_WSI
+        else delete env.ENABLE_GAMESCOPE_WSI
+        delete env.KWIN_X11_NO_SYNC_TO_VBLANK
+        delete env.KWIN_DRM_NO_DIRECT_SCANOUT
+        try { fs.writeFileSync(path.join(dir, 'dxvk.conf'), 'd3d9.maxFrameRate = 60\n', 'utf8') } catch {}
+        log.info('Steam Deck gaming mode: using Proton built-in DXVK and Steam gamescope WSI defaults')
+      }
+
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
 
       // First run: create the prefix before starting the game (racing wineboot breaks RpcSs).
