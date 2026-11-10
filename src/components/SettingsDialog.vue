@@ -118,7 +118,7 @@ async function save() {
           <Icon name="back" /> <span>Voltar</span>
         </button>
         <h2 id="set-title" class="gold-text">Configurações</h2>
-        <button type="button" class="btn btn--ghost btn--icon" aria-label="Fechar" @click="emit('close')">
+        <button type="button" class="btn btn--ghost btn--icon dialog__close" aria-label="Fechar" @click="emit('close')" @pointerup.stop.prevent="emit('close')">
           <Icon name="close" />
         </button>
       </header>
@@ -227,7 +227,7 @@ async function save() {
       </div>
 
       <footer class="dlg__foot">
-        <button type="button" class="btn btn--ghost" @click="emit('close')">Voltar</button>
+        <button type="button" class="btn btn--ghost" @click="emit('close')" @pointerup.stop.prevent="emit('close')">Voltar</button>
         <button type="submit" class="btn btn--gold" :disabled="saving">
           <span v-if="saving" class="spinner" /> Salvar Configurações
         </button>

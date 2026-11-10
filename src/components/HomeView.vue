@@ -66,7 +66,11 @@ const eta = computed(() => {
 async function run(action, ...args) {
   try { await call(action, ...args) } catch (e) { if (e.code !== 'CANCELLED') toast(e.message) }
 }
-function main() {
+let lastMainTime = 0
+function main(e) {
+  const now = Date.now()
+  if (now - lastMainTime < 400) return
+  lastMainTime = now
   const c = client.value
   switch (c.button) {
     case 'INSTALL': case 'REPAIR': return run('install', c.id)
@@ -101,7 +105,8 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
       <p class="side__h">Game client</p>
       <button
         v-for="c in snap.clients" :key="c.id" type="button" class="cc"
-        :class="{ 'is-sel': c.id === client.id, 'is-off': !c.available }" :disabled="busy && c.id !== client.id" @click="select(c.id)"
+        :class="{ 'is-sel': c.id === client.id, 'is-off': !c.available }" :disabled="busy && c.id !== client.id"
+        @click="select(c.id)" @pointerup.stop.prevent="select(c.id)"
       >
         <span class="cc__bits">{{ ARCH[c.architecture]?.slice(0, 2) }}<small>bit</small></span>
         <span class="cc__txt">
@@ -112,11 +117,11 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
       </button>
 
       <div class="side__links">
-        <button v-if="client.available" type="button" class="lnk" :disabled="busy" @click="locate"><Icon name="folder" /> Locate installed game</button>
-        <button type="button" class="lnk" @click="settingsOpen = true"><Icon name="gear" /> Settings</button>
-        <button type="button" class="lnk" @click="run('openGameFolder', client.id)"><Icon name="folder" /> Game folder</button>
-        <button type="button" class="lnk" @click="run('openWebsite')"><Icon name="globe" /> Website</button>
-        <button type="button" class="lnk" @click="run('openLogs')"><Icon name="log" /> Logs</button>
+        <button v-if="client.available" type="button" class="lnk" :disabled="busy" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate installed game</button>
+        <button type="button" class="lnk" @click="settingsOpen = true" @pointerup.stop.prevent="settingsOpen = true"><Icon name="gear" /> Settings</button>
+        <button type="button" class="lnk" @click="run('openGameFolder', client.id)" @pointerup.stop.prevent="run('openGameFolder', client.id)"><Icon name="folder" /> Game folder</button>
+        <button type="button" class="lnk" @click="run('openWebsite')" @pointerup.stop.prevent="run('openWebsite')"><Icon name="globe" /> Website</button>
+        <button type="button" class="lnk" @click="run('openLogs')" @pointerup.stop.prevent="run('openLogs')"><Icon name="log" /> Logs</button>
       </div>
     </aside>
 
@@ -173,12 +178,15 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
         </div>
 
         <div class="bar__actions">
-          <button v-if="busy" type="button" class="btn btn--danger" @click="run('cancel')"><Icon name="stop" /> Cancel</button>
-          <button v-else-if="client.available && !client.installed" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate"><Icon name="folder" /> Locate game</button>
-          <button v-else-if="client.installed && client.available && client.latestVersion" type="button" class="btn btn--ghost" title="Check and repair game files" @click="run('repair', client.id)"><Icon name="wrench" /> Repair</button>
+          <button v-if="busy" type="button" class="btn btn--danger" @click="run('cancel')" @pointerup.stop.prevent="run('cancel')"><Icon name="stop" /> Cancel</button>
+          <button v-else-if="client.available && !client.installed" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate game</button>
+          <button v-else-if="client.installed && client.available && client.latestVersion" type="button" class="btn btn--ghost" title="Check and repair game files" @click="run('repair', client.id)" @pointerup.stop.prevent="run('repair', client.id)"><Icon name="wrench" /> Repair</button>
           <button
             type="button" class="main" :class="{ 'main--busy': btn.busy, 'main--err': btn.error, 'main--play': client.button === 'PLAY' }"
-            :disabled="btn.busy || btn.disabled || (busy && !btn.busy)" @click="main"
+            :disabled="btn.busy || btn.disabled || (busy && !btn.busy)"
+            @click="main"
+            @pointerup.stop.prevent="main"
+            @touchend.stop.prevent="main"
           >
             <span v-if="btn.busy" class="spinner" /><Icon v-else-if="btn.icon" :name="btn.icon" :size="20" />
             {{ btn.label }}

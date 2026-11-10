@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { store, initStore, fmtBytes } from './store.js'
+import { startGamepadNavigation, stopGamepadNavigation } from './gamepad.js'
 import TitleBar from './components/TitleBar.vue'
 import LoginView from './components/LoginView.vue'
 import HomeView from './components/HomeView.vue'
@@ -8,6 +9,7 @@ import WallpaperCarousel from './components/WallpaperCarousel.vue'
 
 onMounted(() => {
   initStore()
+  startGamepadNavigation()
   // Steam Deck virtual keyboard deduplicator for Gamescope duplicate synthetic events
   let lastChar = ''
   let lastTime = 0
@@ -23,6 +25,10 @@ onMounted(() => {
       lastTime = now
     }
   }, true)
+})
+
+onUnmounted(() => {
+  stopGamepadNavigation()
 })
 const showLogin = computed(() => store.ready && !store.snap?.authenticated && !store.skippedLogin)
 const launcherUpdate = computed(() => store.snap?.launcherUpdate)
@@ -89,4 +95,14 @@ const updatePct = computed(() => {
 .toast--info { background: #0b1d2d; border: 1px solid var(--ice-700); color: var(--ice-100); }
 .toast-enter-active, .toast-leave-active { transition: opacity .25s, transform .25s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 10px); }
+
+:global(:focus-visible), :global(.gamepad-focused) {
+  outline: 2px solid var(--gold-400) !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 18px rgba(240, 192, 64, 0.75) !important;
+}
+:global(button), :global(.btn), :global(.main), :global(.lnk), :global(.cc) {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 </style>

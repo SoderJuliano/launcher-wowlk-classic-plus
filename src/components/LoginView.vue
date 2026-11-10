@@ -19,7 +19,11 @@ const MESSAGES = {
   HTTP_404: 'The server does not offer launcher login yet. You can continue without signing in.'
 }
 
+let lastSubmitTime = 0
 async function submit() {
+  const now = Date.now()
+  if (now - lastSubmitTime < 400) return
+  lastSubmitTime = now
   error.value = ''
   busy.value = true
   try {
@@ -50,7 +54,10 @@ function openSite() { call('openWebsite').catch(() => {}) }
       </label>
       <label class="login__remember"><input v-model="form.remember" type="checkbox" /> Keep me signed in</label>
 
-      <button type="submit" class="btn btn--gold login__btn" :disabled="busy || apiState === 'offline'">
+      <button
+        type="submit" class="btn btn--gold login__btn" :disabled="busy || apiState === 'offline'"
+        @pointerup.stop.prevent="submit" @touchend.stop.prevent="submit"
+      >
         <span v-if="busy" class="spinner" /><Icon v-else name="lock" /> Log in
       </button>
 
@@ -61,7 +68,7 @@ function openSite() { call('openWebsite').catch(() => {}) }
 
       <div v-if="apiState !== 'online'" class="login__skip">
         <p class="hint">O login do launcher está conectando ou temporariamente indisponível. Você pode continuar sem entrar (o jogo pedirá sua conta).</p>
-        <button type="button" class="btn btn--ghost" @click="store.skippedLogin = true">Continuar sem entrar / Continue</button>
+        <button type="button" class="btn btn--ghost" @click="store.skippedLogin = true" @pointerup.stop.prevent="store.skippedLogin = true">Continuar sem entrar / Continue</button>
       </div>
     </form>
   </section>

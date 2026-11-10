@@ -6,6 +6,8 @@ const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog, screen } = requ
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-gpu-sandbox')
+  app.commandLine.appendSwitch('touch-events', 'enabled')
+  app.commandLine.appendSwitch('enable-touch-drag-drop')
   // Impede digitação duplicada (ex: "pp", "ee") causada por conflito IBus/Wayland na Steam Deck
   process.env.GTK_IM_MODULE = 'simple'
   process.env.QT_IM_MODULE = 'simple'

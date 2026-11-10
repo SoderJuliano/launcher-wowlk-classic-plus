@@ -14,9 +14,9 @@ const win = (a) => window.olk.window(a)
     <span class="tb__ver" v-if="version">Launcher v{{ version }}</span>
     <div class="tb__drag" />
     <div class="tb__ctl">
-      <button type="button" aria-label="Minimize" @click="win('minimize')"><Icon name="min" :size="16" /></button>
-      <button type="button" aria-label="Maximize" @click="win('maximize')"><Icon name="max" :size="14" /></button>
-      <button type="button" class="tb__x" aria-label="Close" @click="win('close')"><Icon name="x" :size="16" /></button>
+      <button type="button" aria-label="Minimize" @click="win('minimize')" @pointerup.stop.prevent="win('minimize')"><Icon name="min" :size="16" /></button>
+      <button type="button" aria-label="Maximize" @click="win('maximize')" @pointerup.stop.prevent="win('maximize')"><Icon name="max" :size="14" /></button>
+      <button type="button" class="tb__x" aria-label="Close" @click="win('close')" @pointerup.stop.prevent="win('close')"><Icon name="x" :size="16" /></button>
     </div>
   </header>
 </template>
