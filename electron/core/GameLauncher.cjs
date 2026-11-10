@@ -21,99 +21,30 @@ class GameLauncher {
     this.spawn = spawnImpl || spawn
     this.platform = platformName || platform.platform
     this.running = new Map() // clientId -> ChildProcess
-    this.sessions = new Map() // clientId -> { wineserver, winePrefix, env, exeName } (Linux only)
     this.helperPids = new Set() // SoderPad.exe / digita.exe launched through Wine
   }
 
   isRunning(id) { return this.running.has(id) }
 
-  /** Prefixos Wine/Proton usados pelo launcher (o Proton usa <prefix>/pfx como WINEPREFIX real). */
-  #ourPrefixes() {
-    const out = new Set()
-    try {
-      const cfg = this.config?.get?.()
-      const base = cfg?.wine?.prefix || (this.config?.dataDir ? path.join(this.config.dataDir, 'wineprefix') : null)
-      if (base) { out.add(path.resolve(base)); out.add(path.resolve(base, 'pfx')) }
-    } catch {}
-    for (const s of this.sessions.values()) {
-      if (s.winePrefix) out.add(path.resolve(s.winePrefix))
-    }
-    return out
-  }
-
   /**
-   * PIDs de TODOS os processos Wine/Proton do nosso prefixo (Wow.exe, wineserver, SoderPad, digita,
-   * services.exe…), achados por /proc/<pid>/environ (WINEPREFIX / STEAM_COMPAT_DATA_PATH).
-   * Funciona mesmo depois que o launcher foi reiniciado e perdeu a referência aos filhos.
+   * Encerra o jogo e todos os processos auxiliares (Wow.exe, wineserver, SoderPad, digita).
+   * Chamado ao sair pelo botão Steam (Modo Jogo) ou quando a janela do launcher é fechada.
    */
-  findPrefixPids(prefixes = this.#ourPrefixes()) {
-    if (this.platform === 'win32' || !prefixes.size) return []
-    const pids = []
-    let entries = []
-    try { entries = fs.readdirSync('/proc') } catch { return [] }
-    for (const e of entries) {
-      if (!/^\d+$/.test(e)) continue
-      const pid = Number(e)
-      if (pid === process.pid) continue
-      let environ
-      try { environ = fs.readFileSync(`/proc/${e}/environ`, 'latin1') } catch { continue }
-      for (const kv of environ.split('\0')) {
-        const i = kv.indexOf('=')
-        if (i < 0) continue
-        const k = kv.slice(0, i)
-        if ((k === 'WINEPREFIX' || k === 'STEAM_COMPAT_DATA_PATH') && prefixes.has(path.resolve(kv.slice(i + 1)))) { pids.push(pid); break }
-      }
-    }
-    return pids
-  }
-
-  /** Mata (SIGKILL) processos Wine que sobraram de uma sessão anterior travada. */
-  killStalePrefixProcessesSync() {
-    if (this.platform === 'win32' || this.running.size) return 0
-    const pids = this.findPrefixPids()
-    for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} }
-    if (pids.length) {
-      log.warn(`killed ${pids.length} stale Wine/Proton process(es) left in the game prefix by a previous session`)
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800) } catch {}
-    }
-    return pids.length
-  }
-
-  /**
-   * Encerra o jogo e todos os processos auxiliares de forma SÍNCRONA (pode ser chamado
-   * dentro de handlers de SIGTERM/SIGHUP, quando o event loop já não é confiável).
-   * Usado no Steam Deck quando o usuário escolhe "Sair do jogo" pelo botão Steam:
-   * o Steam manda SIGTERM ao launcher, e o Wine/Proton (processos detached) ficava órfão,
-   * travando o SteamOS em "saindo do jogo" eternamente.
-   */
-  shutdownAllSync({ graceMs = 1500 } = {}) {
+  shutdownAllSync() {
     if (this.platform === 'win32') return
     const { spawnSync } = require('node:child_process')
-    const pids = [...[...this.running.values()].map((c) => c?.pid), ...this.helperPids].filter((p) => Number.isInteger(p) && p > 0)
-    const signalAll = (sig) => {
-      for (const pid of pids) {
-        try { process.kill(-pid, sig) } catch { try { process.kill(pid, sig) } catch {} }
-      }
+    for (const [id, child] of this.running.entries()) {
+      try { child.kill('SIGTERM') } catch {}
+      try { process.kill(-child.pid, 'SIGKILL') } catch {}
     }
-    log.info(`shutdownAllSync: terminating ${pids.length} game process group(s)`)
-    signalAll('SIGTERM')
-    for (const s of this.sessions.values()) {
-      try { spawnSync(s.wineserver, ['-k'], { env: { ...s.env, WINEPREFIX: s.winePrefix }, timeout: 4000, stdio: 'ignore' }) } catch {}
+    for (const pid of this.helperPids) {
+      try { process.kill(pid, 'SIGKILL') } catch {}
     }
-    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, graceMs) } catch {}
-    signalAll('SIGKILL')
-    const names = new Set(['SoderPad.exe', 'digita.exe'])
-    for (const s of this.sessions.values()) {
-      if (s.exeName) names.add(s.exeName)
-      try { spawnSync(s.wineserver, ['-k9'], { env: { ...s.env, WINEPREFIX: s.winePrefix }, timeout: 3000, stdio: 'ignore' }) } catch {}
-    }
-    for (const n of names) {
-      try { spawnSync('pkill', ['-9', '-f', n], { timeout: 2000, stdio: 'ignore' }) } catch {}
-    }
-    // Rede de segurança: qualquer processo que ainda tenha o nosso WINEPREFIX no ambiente.
-    for (const pid of this.findPrefixPids()) { try { process.kill(pid, 'SIGKILL') } catch {} }
+    try { spawnSync('pkill', ['-9', '-f', 'Wow.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    try { spawnSync('pkill', ['-9', '-f', 'wineserver'], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    try { spawnSync('pkill', ['-9', '-f', 'SoderPad.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    try { spawnSync('pkill', ['-9', '-f', 'digita.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
     this.running.clear()
-    this.sessions.clear()
     this.helperPids.clear()
   }
 
@@ -674,24 +605,13 @@ class GameLauncher {
         await this.#wineboot(wine.path, env)
       }
 
-      // Guarda onde está o wineserver e qual é o prefixo real, para conseguir derrubar
-      // todos os processos Wine quando o Steam pedir para sair do jogo.
-      const ws = path.join(path.dirname(wine.path), 'wineserver')
-      const wineserver = fs.existsSync(ws) ? ws : 'wineserver'
-      this.sessions.set(id, { wineserver, winePrefix: prefix, env, exeName: path.basename(exe) })
     }
-
-    // Um Wow.exe/wineserver travado de sessão anterior segura o prefixo: o novo Wow.exe conecta
-    // nesse wineserver morto e nunca abre a janela ("fica pensando e não entra"). Limpa antes.
-    if (this.platform !== 'win32') this.killStalePrefixProcessesSync()
 
     log.info(`launching ${id}: ${command} ${args.join(' ')}`)
     const child = await new Promise((resolve, reject) => {
       let proc
       try {
-        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false })
-        proc.stdout?.on('data', (d) => log.info(`[game stdout] ${d.toString().trim()}`))
-        proc.stderr?.on('data', (d) => log.warn(`[game stderr] ${d.toString().trim()}`))
+        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
       } catch (err) {
         return reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`))
       }
@@ -701,7 +621,6 @@ class GameLauncher {
     this.running.set(id, child)
     child.once('exit', (code) => {
       this.running.delete(id)
-      this.sessions.delete(id)
       log.info(`${id} exited with code ${code}`)
       onExit?.(code)
       if (this.platform !== 'win32') {

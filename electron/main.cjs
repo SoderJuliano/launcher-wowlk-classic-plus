@@ -171,16 +171,7 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    const isGamescope = process.platform === 'linux' && (
-      process.env.XDG_CURRENT_DESKTOP === 'gamescope' ||
-      !!process.env.GAMESCOPE_WAYLAND_DISPLAY ||
-      process.env.SteamOS === '1' ||
-      process.env.STEAM_DECK === '1' ||
-      process.env.USER === 'deck'
-    )
-    if (!isGamescope) {
-      try { win?.minimize() } catch {}
-    }
+    try { win?.minimize() } catch {}
     return res
   })
   handle('installSteamArt', () => {
