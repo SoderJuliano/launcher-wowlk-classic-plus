@@ -27,6 +27,58 @@ class GameLauncher {
 
   isRunning(id) { return this.running.has(id) }
 
+  /** Prefixos Wine/Proton usados pelo launcher (o Proton usa <prefix>/pfx como WINEPREFIX real). */
+  #ourPrefixes() {
+    const out = new Set()
+    try {
+      const cfg = this.config?.get?.()
+      const base = cfg?.wine?.prefix || (this.config?.dataDir ? path.join(this.config.dataDir, 'wineprefix') : null)
+      if (base) { out.add(path.resolve(base)); out.add(path.resolve(base, 'pfx')) }
+    } catch {}
+    for (const s of this.sessions.values()) {
+      if (s.winePrefix) out.add(path.resolve(s.winePrefix))
+    }
+    return out
+  }
+
+  /**
+   * PIDs de TODOS os processos Wine/Proton do nosso prefixo (Wow.exe, wineserver, SoderPad, digita,
+   * services.exe…), achados por /proc/<pid>/environ (WINEPREFIX / STEAM_COMPAT_DATA_PATH).
+   * Funciona mesmo depois que o launcher foi reiniciado e perdeu a referência aos filhos.
+   */
+  findPrefixPids(prefixes = this.#ourPrefixes()) {
+    if (this.platform === 'win32' || !prefixes.size) return []
+    const pids = []
+    let entries = []
+    try { entries = fs.readdirSync('/proc') } catch { return [] }
+    for (const e of entries) {
+      if (!/^\d+$/.test(e)) continue
+      const pid = Number(e)
+      if (pid === process.pid) continue
+      let environ
+      try { environ = fs.readFileSync(`/proc/${e}/environ`, 'latin1') } catch { continue }
+      for (const kv of environ.split('\0')) {
+        const i = kv.indexOf('=')
+        if (i < 0) continue
+        const k = kv.slice(0, i)
+        if ((k === 'WINEPREFIX' || k === 'STEAM_COMPAT_DATA_PATH') && prefixes.has(path.resolve(kv.slice(i + 1)))) { pids.push(pid); break }
+      }
+    }
+    return pids
+  }
+
+  /** Mata (SIGKILL) processos Wine que sobraram de uma sessão anterior travada. */
+  killStalePrefixProcessesSync() {
+    if (this.platform === 'win32' || this.running.size) return 0
+    const pids = this.findPrefixPids()
+    for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} }
+    if (pids.length) {
+      log.warn(`killed ${pids.length} stale Wine/Proton process(es) left in the game prefix by a previous session`)
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800) } catch {}
+    }
+    return pids.length
+  }
+
   /**
    * Encerra o jogo e todos os processos auxiliares de forma SÍNCRONA (pode ser chamado
    * dentro de handlers de SIGTERM/SIGHUP, quando o event loop já não é confiável).
@@ -58,6 +110,8 @@ class GameLauncher {
     for (const n of names) {
       try { spawnSync('pkill', ['-9', '-f', n], { timeout: 2000, stdio: 'ignore' }) } catch {}
     }
+    // Rede de segurança: qualquer processo que ainda tenha o nosso WINEPREFIX no ambiente.
+    for (const pid of this.findPrefixPids()) { try { process.kill(pid, 'SIGKILL') } catch {} }
     this.running.clear()
     this.sessions.clear()
     this.helperPids.clear()
@@ -647,6 +701,10 @@ class GameLauncher {
       }
       this.sessions.set(id, { wineserver: wineserver || 'wineserver', winePrefix, env, exeName: path.basename(exe) })
     }
+
+    // Um Wow.exe/wineserver travado de sessão anterior segura o prefixo: o novo Wow.exe conecta
+    // nesse wineserver morto e nunca abre a janela ("fica pensando e não entra"). Limpa antes.
+    if (this.platform !== 'win32') this.killStalePrefixProcessesSync()
 
     log.info(`launching ${id}: ${command} ${args.join(' ')}`)
     const child = await new Promise((resolve, reject) => {
