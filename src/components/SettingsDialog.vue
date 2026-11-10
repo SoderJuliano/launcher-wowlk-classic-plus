@@ -23,6 +23,7 @@ const busy = computed(() => !!store.snap.task)
 const detectingWine = ref(false)
 const wineCandidates = ref([])
 const resettingPrefix = ref(false)
+const applyingSteamArt = ref(false)
 
 async function pick(key, kind) {
   const r = await window.olk[kind === 'file' ? 'pickFile' : 'pickFolder']()
@@ -62,6 +63,22 @@ async function resetPrefix() {
     toast(`Erro ao resetar prefix: ${e.message}`, 'error')
   } finally {
     resettingPrefix.value = false
+  }
+}
+
+async function applySteamArt() {
+  applyingSteamArt.value = true
+  try {
+    const res = await call('installSteamArt')
+    if (res?.ok) {
+      toast(`Arte da Steam aplicada! ${res.matchedShortcuts?.length || 0} atalho(s) configurado(s). Imagens salvas em Pictures.`, 'info')
+    } else {
+      toast('Não foi possível aplicar a arte da Steam.', 'warn')
+    }
+  } catch (e) {
+    toast(`Falha ao aplicar arte da Steam: ${e.message}`, 'error')
+  } finally {
+    applyingSteamArt.value = false
   }
 }
 
@@ -165,6 +182,14 @@ async function save() {
               </button>
             </div>
           </label>
+
+          <h3>Steam Big Picture & Steam Deck</h3>
+          <div class="actions-row">
+            <button type="button" class="btn" :disabled="applyingSteamArt" @click="applySteamArt">
+              <span v-if="applyingSteamArt" class="spinner" /> 🎨 Exportar & Aplicar Arte da Steam (Plano de Fundo)
+            </button>
+          </div>
+          <small class="hint">Aplica o plano de fundo (1920x620), capa de biblioteca e logo transparente diretamente nos atalhos da Steam e exporta cópias para a pasta Imagens.</small>
         </template>
 
         <h3>Servidor & Conexão</h3>

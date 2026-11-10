@@ -1,6 +1,13 @@
 'use strict'
 const path = require('node:path')
 const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog, screen } = require('electron')
+
+// Linux / Steam Deck Gamescope flags to prevent crashes under Wayland / Big Picture
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+}
+
 const log = require('./core/logger.cjs')
 const { toPlain, LauncherError } = require('./core/errors.cjs')
 const { assertSafeUrl } = require('./core/pathSafety.cjs')
@@ -56,20 +63,35 @@ function createWindow() {
   let minW = 860
   let minH = 500
 
-  try {
-    const primary = screen.getPrimaryDisplay()
-    const work = primary.workAreaSize || primary.size
-    if (work && work.width && work.height) {
-      // In SteamOS Desktop Mode (800p) or compact displays, keep height well clear of the taskbar
-      const maxAllowedH = work.height <= 850 ? Math.min(600, work.height - 50) : 720
-      const maxAllowedW = work.width <= 1300 ? Math.min(1080, work.width - 40) : 1180
-      targetW = Math.max(860, maxAllowedW)
-      targetH = Math.max(480, maxAllowedH)
-      minW = Math.min(840, work.width)
-      minH = Math.min(480, work.height)
+  const isGamescope = process.platform === 'linux' && (
+    process.env.XDG_CURRENT_DESKTOP === 'gamescope' ||
+    !!process.env.GAMESCOPE_WAYLAND_DISPLAY ||
+    process.env.SteamOS === '1' ||
+    process.env.STEAM_DECK === '1' ||
+    process.env.USER === 'deck'
+  )
+
+  if (isGamescope) {
+    targetW = 1280
+    targetH = 800
+    minW = 800
+    minH = 480
+  } else {
+    try {
+      const primary = screen.getPrimaryDisplay()
+      const work = primary.workAreaSize || primary.size
+      if (work && work.width && work.height) {
+        // In SteamOS Desktop Mode (800p) or compact displays, keep height well clear of the taskbar
+        const maxAllowedH = work.height <= 850 ? Math.min(600, work.height - 50) : 720
+        const maxAllowedW = work.width <= 1300 ? Math.min(1080, work.width - 40) : 1180
+        targetW = Math.max(860, maxAllowedW)
+        targetH = Math.max(480, maxAllowedH)
+        minW = Math.min(840, work.width)
+        minH = Math.min(480, work.height)
+      }
+    } catch (err) {
+      log.warn('could not determine workAreaSize', err?.message)
     }
-  } catch (err) {
-    log.warn('could not determine workAreaSize', err?.message)
   }
 
   win = new BrowserWindow({
@@ -91,7 +113,23 @@ function createWindow() {
       spellcheck: false
     }
   })
-  win.once('ready-to-show', () => win.show())
+
+  let shown = false
+  const showWindow = () => {
+    if (shown) return
+    shown = true
+    if (win && !win.isDestroyed()) {
+      win.show()
+      if (isGamescope) {
+        try { win.maximize() } catch {}
+      }
+      win.focus()
+    }
+  }
+  win.once('ready-to-show', showWindow)
+  // Fallback safety timeout for Gamescope / Big Picture window compositor
+  setTimeout(showWindow, 1000)
+
   // No navigation away from the app, no popups: external links go to the system browser.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (e) => e.preventDefault())
@@ -124,8 +162,21 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    try { win?.minimize() } catch {}
+    const isGamescope = process.platform === 'linux' && (
+      process.env.XDG_CURRENT_DESKTOP === 'gamescope' ||
+      !!process.env.GAMESCOPE_WAYLAND_DISPLAY ||
+      process.env.SteamOS === '1' ||
+      process.env.STEAM_DECK === '1' ||
+      process.env.USER === 'deck'
+    )
+    if (!isGamescope) {
+      try { win?.minimize() } catch {}
+    }
     return res
+  })
+  handle('installSteamArt', () => {
+    const { installSteamGridArtwork } = require('./core/steamGrid.cjs')
+    return installSteamGridArtwork()
   })
   handle('installWine', () => controller.installWine())
   handle('detectWineCandidates', () => controller.detectWineCandidates())
@@ -180,4 +231,12 @@ app.whenReady().then(async () => {
   registerIpc()
   createWindow()
   controller.init().catch((err) => log.error('init failed', err))
+  if (process.platform === 'linux') {
+    try {
+      const { installSteamGridArtwork } = require('./core/steamGrid.cjs')
+      installSteamGridArtwork()
+    } catch (err) {
+      log.warn('initial steam grid install failed', err?.message)
+    }
+  }
 })
