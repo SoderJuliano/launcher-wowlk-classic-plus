@@ -97,7 +97,7 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     const deckOpts = [
       ['gxResolution', '1280x800'],
       ['gxWindow', '1'],
-      ['gxMaximize', '0'],
+      ['gxMaximize', '1'],
       ['gxVSync', '0'],
       ['gxTripleBuffer', '0'],
       ['gxFixLag', '0'],

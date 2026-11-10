@@ -48,28 +48,31 @@ class GameLauncher {
     const fallbackPath = path.join(dir, 'soderpad_state.bin')
     const fds = new Map() // path -> { fd, type }
     const state = {
-      buttons: 0,
-      lx: 0, ly: 0, rx: 0, ry: 0,
+      btn: new Uint8Array(16),
+      lx: 0.0, ly: 0.0, rx: 0.0, ry: 0.0,
       lt: 0, rt: 0,
       seq: 0,
       active: false,
     }
-    const outBuf = Buffer.alloc(64)
+    const outBuf = Buffer.alloc(48)
     const readBuf = Buffer.alloc(256)
 
     const writeState = () => {
       state.seq = (state.seq + 1) >>> 0
       outBuf.fill(0)
       outBuf.writeUInt32LE(0x53504144, 0) // 'SPAD'
-      outBuf.writeUInt32LE(1, 4)          // version 1
-      outBuf.writeUInt32LE(state.seq, 8)
-      outBuf.writeUInt32LE(state.buttons >>> 0, 12)
-      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.lx | 0)), 16)
-      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.ly | 0)), 18)
-      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.rx | 0)), 20)
-      outBuf.writeInt16LE(Math.max(-32768, Math.min(32767, state.ry | 0)), 22)
-      outBuf.writeUInt8(Math.max(0, Math.min(255, state.lt | 0)), 24)
-      outBuf.writeUInt8(Math.max(0, Math.min(255, state.rt | 0)), 25)
+      outBuf.writeUInt32LE(state.seq, 4)
+      outBuf.writeUInt32LE((state.active || fds.size > 0) ? 1 : 0, 8)
+      for (let i = 0; i < 16; i++) {
+        outBuf.writeUInt8(state.btn[i] ? 1 : 0, 12 + i)
+      }
+      outBuf.writeUInt8(state.lt ? 1 : 0, 28)
+      outBuf.writeUInt8(state.rt ? 1 : 0, 29)
+      outBuf.writeUInt16LE(0, 30) // reserved
+      outBuf.writeFloatLE(state.lx, 32)
+      outBuf.writeFloatLE(state.ly, 36)
+      outBuf.writeFloatLE(state.rx, 40)
+      outBuf.writeFloatLE(state.ry, 44)
       try { fs.writeFileSync(shmPath, outBuf) } catch {}
       try { fs.writeFileSync(fallbackPath, outBuf) } catch {}
     }
@@ -133,40 +136,38 @@ class GameLauncher {
       const b10 = buf[10]
       const b11 = buf[11]
       const b13 = buf[13]
-      let btns = 0
-      if (b8 & 0x80) btns |= 0x1000 // A
-      if (b8 & 0x20) btns |= 0x2000 // B
-      if (b8 & 0x40) btns |= 0x4000 // X
-      if (b8 & 0x10) btns |= 0x8000 // Y
-      if (b8 & 0x08) btns |= 0x0100 // L1 (LB)
-      if (b8 & 0x04) btns |= 0x0200 // R1 (RB)
-      if (b9 & 0x01) btns |= 0x0001 // D-Pad Up
-      if (b9 & 0x08) btns |= 0x0002 // D-Pad Down
-      if (b9 & 0x04) btns |= 0x0004 // D-Pad Left
-      if (b9 & 0x02) btns |= 0x0008 // D-Pad Right
-      if (b9 & 0x10) btns |= 0x0020 // Select / View (Back)
-      if (b9 & 0x40) btns |= 0x0010 // Start / Menu
-      if (b9 & 0x20) btns |= 0x0400 // Steam / Guide
-      if ((b10 & 0x40) || (b9 & 0x80) || (b13 & 0x02)) btns |= 0x0040 // L3 (ou L4/L5)
-      if ((b11 & 0x04) || (b10 & 0x01) || (b13 & 0x04)) btns |= 0x0080 // R3 (ou R4/R5)
 
-      state.buttons = btns
-      state.lx = buf.readInt16LE(48)
-      state.ly = buf.readInt16LE(50)
-      state.rx = buf.readInt16LE(52)
-      state.ry = buf.readInt16LE(54)
+      state.btn[0] = (b8 & 0x80) ? 1 : 0 // A
+      state.btn[1] = (b8 & 0x20) ? 1 : 0 // B
+      state.btn[2] = (b8 & 0x40) ? 1 : 0 // X
+      state.btn[3] = (b8 & 0x10) ? 1 : 0 // Y
+      state.btn[4] = (b8 & 0x08) ? 1 : 0 // LB
+      state.btn[5] = (b8 & 0x04) ? 1 : 0 // RB
+      state.btn[6] = (b9 & 0x10) ? 1 : 0 // Back
+      state.btn[7] = (b9 & 0x40) ? 1 : 0 // Start
+      state.btn[8] = ((b10 & 0x40) || (b9 & 0x80) || (b13 & 0x02)) ? 1 : 0 // L3
+      state.btn[9] = ((b11 & 0x04) || (b10 & 0x01) || (b13 & 0x04)) ? 1 : 0 // R3
+      state.btn[10] = (b9 & 0x01) ? 1 : 0 // D-Pad Up
+      state.btn[11] = (b9 & 0x02) ? 1 : 0 // D-Pad Right
+      state.btn[12] = (b9 & 0x08) ? 1 : 0 // D-Pad Down
+      state.btn[13] = (b9 & 0x04) ? 1 : 0 // D-Pad Left
+      state.btn[14] = (b13 & 0x01) ? 1 : 0 // Paddle L4
+
+      const rawLx = buf.readInt16LE(48)
+      const rawLy = buf.readInt16LE(50)
+      const rawRx = buf.readInt16LE(52)
+      const rawRy = buf.readInt16LE(54)
+      state.lx = rawLx < 0 ? rawLx / 32768.0 : rawLx / 32767.0
+      state.ly = rawLy < 0 ? -rawLy / 32768.0 : -rawLy / 32767.0
+      state.rx = rawRx < 0 ? rawRx / 32768.0 : rawRx / 32767.0
+      state.ry = rawRy < 0 ? -rawRy / 32768.0 : -rawRy / 32767.0
 
       const rawLt = buf.readUInt16LE(44)
       const rawRt = buf.readUInt16LE(46)
-      state.lt = (b8 & 0x02) ? 255 : Math.min(255, rawLt >> 7)
-      state.rt = (b8 & 0x01) ? 255 : Math.min(255, rawRt >> 7)
+      state.lt = (b8 & 0x02) || (rawLt > 8000) ? 1 : 0
+      state.rt = (b8 & 0x01) || (rawRt > 8000) ? 1 : 0
       state.active = true
       return true
-    }
-
-    const setBit = (mask, on) => {
-      if (on) state.buttons |= mask
-      else state.buttons &= ~mask
     }
 
     const parseJoydev = (buf, len) => {
@@ -176,36 +177,36 @@ class GameLauncher {
         const type = buf[off + 6] & ~0x80
         const num = buf[off + 7]
         if (type === 1) { // JS_EVENT_BUTTON
-          const pressed = value !== 0
-          if (num === 0) setBit(0x1000, pressed)      // A
-          else if (num === 1) setBit(0x2000, pressed) // B
-          else if (num === 2) setBit(0x4000, pressed) // X
-          else if (num === 3) setBit(0x8000, pressed) // Y
-          else if (num === 4) setBit(0x0100, pressed) // LB
-          else if (num === 5) setBit(0x0200, pressed) // RB
-          else if (num === 6) setBit(0x0020, pressed) // Back
-          else if (num === 7) setBit(0x0010, pressed) // Start
-          else if (num === 8) setBit(0x0400, pressed) // Guide
-          else if (num === 9) setBit(0x0040, pressed) // L3
-          else if (num === 10) setBit(0x0080, pressed)// R3
-          else if (num === 11) setBit(0x0001, pressed)// D-Up
-          else if (num === 12) setBit(0x0002, pressed)// D-Down
-          else if (num === 13) setBit(0x0004, pressed)// D-Left
-          else if (num === 14) setBit(0x0008, pressed)// D-Right
+          const pressed = value !== 0 ? 1 : 0
+          if (num === 0) state.btn[0] = pressed       // A
+          else if (num === 1) state.btn[1] = pressed  // B
+          else if (num === 2) state.btn[2] = pressed  // X
+          else if (num === 3) state.btn[3] = pressed  // Y
+          else if (num === 4) state.btn[4] = pressed  // LB
+          else if (num === 5) state.btn[5] = pressed  // RB
+          else if (num === 6) state.btn[6] = pressed  // Back
+          else if (num === 7) state.btn[7] = pressed  // Start
+          else if (num === 9) state.btn[8] = pressed  // L3
+          else if (num === 10) state.btn[9] = pressed // R3
+          else if (num === 11) state.btn[10] = pressed// D-Up
+          else if (num === 12) state.btn[12] = pressed// D-Down
+          else if (num === 13) state.btn[13] = pressed// D-Left
+          else if (num === 14) state.btn[11] = pressed// D-Right
           updated = true
         } else if (type === 2) { // JS_EVENT_AXIS
-          if (num === 0) state.lx = value
-          else if (num === 1) state.ly = Math.max(-32768, Math.min(32767, -value))
-          else if (num === 2) state.lt = Math.min(255, Math.max(0, (value + 32767) >> 8))
-          else if (num === 3) state.rx = value
-          else if (num === 4) state.ry = Math.max(-32768, Math.min(32767, -value))
-          else if (num === 5) state.rt = Math.min(255, Math.max(0, (value + 32767) >> 8))
+          const fval = value < 0 ? value / 32768.0 : value / 32767.0
+          if (num === 0) state.lx = fval
+          else if (num === 1) state.ly = -fval
+          else if (num === 2) state.lt = value > 0 ? 1 : 0
+          else if (num === 3) state.rx = fval
+          else if (num === 4) state.ry = -fval
+          else if (num === 5) state.rt = value > 0 ? 1 : 0
           else if (num === 6) {
-            setBit(0x0004, value < -8000)
-            setBit(0x0008, value > 8000)
+            state.btn[13] = value < -8000 ? 1 : 0 // D-Left
+            state.btn[11] = value > 8000 ? 1 : 0  // D-Right
           } else if (num === 7) {
-            setBit(0x0001, value < -8000)
-            setBit(0x0002, value > 8000)
+            state.btn[10] = value < -8000 ? 1 : 0 // D-Up
+            state.btn[12] = value > 8000 ? 1 : 0  // D-Down
           }
           updated = true
         }
@@ -222,38 +223,38 @@ class GameLauncher {
         const code = buf.readUInt16LE(off + 18)
         const val = buf.readInt32LE(off + 20)
         if (type === 1) { // EV_KEY
-          const p = val !== 0
-          if (code === 304) setBit(0x1000, p)      // BTN_SOUTH (A)
-          else if (code === 305) setBit(0x2000, p) // BTN_EAST (B)
-          else if (code === 307) setBit(0x4000, p) // BTN_NORTH (X)
-          else if (code === 308) setBit(0x8000, p) // BTN_WEST (Y)
-          else if (code === 310) setBit(0x0100, p) // BTN_TL (LB)
-          else if (code === 311) setBit(0x0200, p) // BTN_TR (RB)
-          else if (code === 312) state.lt = p ? 255 : 0
-          else if (code === 313) state.rt = p ? 255 : 0
-          else if (code === 314) setBit(0x0020, p) // BTN_SELECT
-          else if (code === 315) setBit(0x0010, p) // BTN_START
-          else if (code === 316) setBit(0x0400, p) // BTN_MODE
-          else if (code === 317) setBit(0x0040, p) // BTN_THUMBL
-          else if (code === 318) setBit(0x0080, p) // BTN_THUMBR
-          else if (code === 544) setBit(0x0001, p) // BTN_DPAD_UP
-          else if (code === 545) setBit(0x0002, p) // BTN_DPAD_DOWN
-          else if (code === 546) setBit(0x0004, p) // BTN_DPAD_LEFT
-          else if (code === 547) setBit(0x0008, p) // BTN_DPAD_RIGHT
+          const p = val !== 0 ? 1 : 0
+          if (code === 304) state.btn[0] = p       // BTN_SOUTH (A)
+          else if (code === 305) state.btn[1] = p  // BTN_EAST (B)
+          else if (code === 307) state.btn[2] = p  // BTN_NORTH (X)
+          else if (code === 308) state.btn[3] = p  // BTN_WEST (Y)
+          else if (code === 310) state.btn[4] = p  // BTN_TL (LB)
+          else if (code === 311) state.btn[5] = p  // BTN_TR (RB)
+          else if (code === 312) state.lt = p
+          else if (code === 313) state.rt = p
+          else if (code === 314) state.btn[6] = p  // BTN_SELECT
+          else if (code === 315) state.btn[7] = p  // BTN_START
+          else if (code === 317) state.btn[8] = p  // BTN_THUMBL
+          else if (code === 318) state.btn[9] = p  // BTN_THUMBR
+          else if (code === 544) state.btn[10] = p // BTN_DPAD_UP
+          else if (code === 545) state.btn[12] = p // BTN_DPAD_DOWN
+          else if (code === 546) state.btn[13] = p // BTN_DPAD_LEFT
+          else if (code === 547) state.btn[11] = p // BTN_DPAD_RIGHT
           updated = true
         } else if (type === 3) { // EV_ABS
-          if (code === 0) state.lx = val
-          else if (code === 1) state.ly = Math.max(-32768, Math.min(32767, -val))
-          else if (code === 3) state.rx = val
-          else if (code === 4) state.ry = Math.max(-32768, Math.min(32767, -val))
-          else if (code === 2 || code === 10) state.lt = Math.min(255, Math.max(0, val > 255 ? (val >> 7) : val))
-          else if (code === 5 || code === 9) state.rt = Math.min(255, Math.max(0, val > 255 ? (val >> 7) : val))
+          const fval = val < 0 ? val / 32768.0 : val / 32767.0
+          if (code === 0) state.lx = fval
+          else if (code === 1) state.ly = -fval
+          else if (code === 3) state.rx = fval
+          else if (code === 4) state.ry = -fval
+          else if (code === 2 || code === 10) state.lt = val > 128 ? 1 : 0
+          else if (code === 5 || code === 9) state.rt = val > 128 ? 1 : 0
           else if (code === 16) {
-            setBit(0x0004, val < 0)
-            setBit(0x0008, val > 0)
+            state.btn[13] = val < 0 ? 1 : 0
+            state.btn[11] = val > 0 ? 1 : 0
           } else if (code === 17) {
-            setBit(0x0001, val < 0)
-            setBit(0x0002, val > 0)
+            state.btn[10] = val < 0 ? 1 : 0
+            state.btn[12] = val > 0 ? 1 : 0
           }
           updated = true
         }
