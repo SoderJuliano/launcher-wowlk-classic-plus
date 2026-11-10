@@ -6,6 +6,10 @@ const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog, screen } = requ
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-gpu-sandbox')
+  // Impede digitação duplicada (ex: "pp", "ee") causada por conflito IBus/Wayland na Steam Deck
+  process.env.GTK_IM_MODULE = 'simple'
+  process.env.QT_IM_MODULE = 'simple'
+  process.env.XMODIFIERS = '@im=none'
 }
 
 const log = require('./core/logger.cjs')

@@ -6,41 +6,47 @@ const path = require('node:path')
 const os = require('node:os')
 const {
   steamCrc32,
-  calculateSteamAppIds,
+  getAllIdsForShortcut,
   parseBinaryVdf,
+  serializeBinaryVdf,
   isMatchingShortcut,
   installSteamGridArtwork
 } = require('../electron/core/steamGrid.cjs')
 
-test('Steam Grid: CRC32 and AppId calculation', () => {
-  const ids = calculateSteamAppIds('/home/deck/Downloads/OLK-Plus-Launcher-0.1.20.AppImage', 'OLK Plus Launcher')
-  assert.ok(ids.appId32)
-  assert.ok(ids.appId64)
-  assert.ok(ids.appIdSigned)
-  // appId32 must have top bit set (>= 0x80000000)
-  assert.ok(Number(ids.appId32) >= 0x80000000)
+test('Steam Grid: CRC32 and getAllIdsForShortcut', () => {
+  const item = {
+    AppName: 'OLK Plus Launcher',
+    Exe: '"/home/deck/Downloads/OLK-Plus-Launcher-0.1.21.AppImage"',
+    appid: -126965618
+  }
+  const ids = getAllIdsForShortcut(item)
+  assert.ok(ids.length > 5)
+  assert.ok(ids.includes('-126965618'))
+  assert.ok(ids.includes('4168001678'))
+  assert.ok(ids.includes('17901430896716677120'))
 })
 
-test('Steam Grid: binary VDF parser', () => {
-  const buf = Buffer.from([
-    0x00, ...Buffer.from('shortcuts\0'),
-      0x00, ...Buffer.from('0\0'),
-        0x01, ...Buffer.from('AppName\0'), ...Buffer.from('OLK Plus\0'),
-        0x01, ...Buffer.from('Exe\0'), ...Buffer.from('/home/deck/Downloads/olk.AppImage\0'),
-        0x02, ...Buffer.from('appid\0'), 0x12, 0x34, 0x56, 0x78,
-      0x08,
-    0x08,
-    0x08
-  ])
+test('Steam Grid: binary VDF serialize and parse round-trip', () => {
+  const original = {
+    "0": {
+      "AppName": "OLK Plus Launcher",
+      "Exe": "\"/home/deck/Downloads/OLK.AppImage\"",
+      "StartDir": "\"/home/deck/Downloads\"",
+      "icon": "/path/to/icon.png",
+      "appid": -123456
+    }
+  }
+  const buf = serializeBinaryVdf(original)
   const res = parseBinaryVdf(buf)
   assert.ok(res?.shortcuts?.['0'])
-  assert.equal(res.shortcuts['0'].AppName, 'OLK Plus')
-  assert.equal(res.shortcuts['0'].appid, 2018915346)
+  assert.equal(res.shortcuts['0'].AppName, 'OLK Plus Launcher')
+  assert.equal(res.shortcuts['0'].appid, -123456)
 })
 
 test('Steam Grid: shortcut matching logic', () => {
   assert.equal(isMatchingShortcut({ AppName: 'OLK Plus Launcher', Exe: '/path/app' }), true)
-  assert.equal(isMatchingShortcut({ AppName: 'WoW Classic Plus', Exe: '/path/app' }), true)
+  assert.equal(isMatchingShortcut({ AppName: 'World of Warcraft', Exe: '/path/app' }), true)
+  assert.equal(isMatchingShortcut({ AppName: 'ChromieCraft', Exe: '/path/app' }), true)
   assert.equal(isMatchingShortcut({ AppName: 'Other Game', Exe: '/path/olk-plus-launcher' }), true)
   assert.equal(isMatchingShortcut({ AppName: 'Cyberpunk 2077', Exe: '/games/cp2077.exe' }), false)
 })

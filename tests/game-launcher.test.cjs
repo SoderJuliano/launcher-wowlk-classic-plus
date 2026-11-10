@@ -81,6 +81,29 @@ test('Linux path: uses internal wine runner fallback when available', async () =
   assert.ok(calls[0].opts.env.PATH.includes(internalWineDir))
 })
 
+test('Linux path: Proton runner executes with proton run and Steam environment', async () => {
+  const { config, installer, dir } = await installedClient()
+  const protonRoot = path.join(config.dataDir, 'Proton 9.0')
+  const protonBin = path.join(protonRoot, 'dist', 'bin')
+  fs.mkdirSync(protonBin, { recursive: true })
+  const mockWine = path.join(protonBin, 'wine')
+  const mockProton = path.join(protonRoot, 'proton')
+  fs.copyFileSync(process.execPath, mockWine)
+  fs.copyFileSync(process.execPath, mockProton)
+  fs.chmodSync(mockWine, 0o755)
+  fs.chmodSync(mockProton, 0o755)
+
+  config.update({ 'wine.path': mockWine })
+  const calls = []
+  const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' }) }
+  const launcher = new GameLauncher({ config, installer, spawnImpl, platformName: 'linux' })
+  await launcher.launch('wow32')
+  assert.equal(calls[0].cmd, mockProton)
+  assert.deepEqual(calls[0].args, ['run', path.join(dir, 'Wow.exe')])
+  assert.ok(calls[0].opts.env.STEAM_COMPAT_DATA_PATH)
+  assert.ok(calls[0].opts.env.STEAM_COMPAT_CLIENT_INSTALL_PATH)
+})
+
 test('real process start on this OS (copy of a system binary as Wow.exe)', { skip: process.platform !== 'win32' && 'Windows-only smoke test' }, async () => {
   const { config, installer, dir } = await installedClient()
   fs.copyFileSync(path.join(process.env.SystemRoot, 'System32', 'whoami.exe'), path.join(dir, 'Wow.exe'))

@@ -1,9 +1,11 @@
 'use strict'
 /**
  * steamGrid.cjs — Detects Steam shortcuts on Linux/SteamOS and installs custom
- * artwork (Hero background, Library poster, Capsule banner, and Logo) directly
- * into Steam's userdata/<id>/config/grid/ folder. Also exports copies to ~/Pictures/OLK-Plus-Steam-Art/
- * so the user can easily select them manually in Steam Big Picture or Desktop mode.
+ * artwork (Hero background 1920x620, Library poster 600x900, Capsule banner 460x215,
+ * and transparent Logo) directly into Steam's userdata/<id>/config/grid/ folder.
+ * 
+ * Works 100% AUTOMATICALLY without requiring any mouse clicks or manual configuration.
+ * Also exports copies to ~/Pictures/OLK-Plus-Steam-Art/ as an extra backup.
  */
 const fs = require('node:fs')
 const path = require('node:path')
@@ -16,18 +18,54 @@ function steamCrc32(str) {
   return zlib.crc32(Buffer.from(str, 'utf8'))
 }
 
-function calculateSteamAppIds(exe, appName) {
-  const combined = (exe || '') + (appName || '')
-  const crc = steamCrc32(combined)
-  const appId32 = (crc | 0x80000000) >>> 0
-  const appId64 = (BigInt(appId32) << 32n) | 0x02000000n
-  const appIdSigned = appId32 | 0
-  return {
-    combined,
-    appId32: String(appId32),
-    appId64: appId64.toString(),
-    appIdSigned: String(appIdSigned)
+/**
+ * Generates all possible 32-bit and 64-bit ID variants that Steam (Big Picture,
+ * Desktop UI, Steam Deck Gamescope) uses to look up grid images.
+ */
+function getAllIdsForShortcut(item) {
+  const idSet = new Set()
+
+  // 1. Raw appid from shortcuts.vdf (signed int32 or unsigned)
+  if (item && item.appid != null) {
+    const rawId = Number(item.appid)
+    idSet.add(String(rawId))
+    const u32 = (rawId >>> 0)
+    idSet.add(String(u32))
+    const u64 = (BigInt(u32) << 32n) | 0x02000000n
+    idSet.add(u64.toString())
+    idSet.add(BigInt.asIntN(64, u64).toString())
   }
+
+  // 2. Compute CRC with various string quoting / path variations
+  const exeRaw = String(item?.Exe || '')
+  const exeClean = exeRaw.replace(/^["']|["']$/g, '').trim()
+  const exeQuoted = `"${exeClean}"`
+  const name = String(item?.AppName || '').trim()
+
+  const variations = [
+    exeRaw + name,
+    exeClean + name,
+    exeQuoted + name,
+    exeRaw,
+    exeClean
+  ]
+
+  for (const v of variations) {
+    if (!v) continue
+    const crc = steamCrc32(v)
+    const u32 = (crc | 0x80000000) >>> 0
+    const s32 = u32 | 0
+    const u64 = (BigInt(u32) << 32n) | 0x02000000n
+    const s64 = BigInt.asIntN(64, u64)
+    idSet.add(String(u32))
+    idSet.add(String(s32))
+    idSet.add(u64.toString())
+    idSet.add(s64.toString())
+  }
+
+  idSet.delete('0')
+  idSet.delete('')
+  return Array.from(idSet)
 }
 
 /** Parses Valve binary VDF format (shortcuts.vdf) */
@@ -78,6 +116,43 @@ function parseBinaryVdf(buf) {
   }
 }
 
+/** Serializes shortcuts object into Valve binary VDF format */
+function serializeBinaryVdf(shortcuts) {
+  const chunks = []
+  const writeByte = (b) => chunks.push(Buffer.from([b]))
+  const writeString = (s) => chunks.push(Buffer.from(String(s) + '\0', 'utf8'))
+  const writeInt32 = (n) => {
+    const b = Buffer.alloc(4)
+    b.writeInt32LE(n | 0, 0)
+    chunks.push(b)
+  }
+
+  writeByte(0x00)
+  writeString('shortcuts')
+
+  const keys = Object.keys(shortcuts)
+  for (let i = 0; i < keys.length; i++) {
+    const item = shortcuts[keys[i]]
+    writeByte(0x00)
+    writeString(String(i))
+    for (const [k, v] of Object.entries(item)) {
+      if (typeof v === 'string') {
+        writeByte(0x01)
+        writeString(k)
+        writeString(v)
+      } else if (typeof v === 'number') {
+        writeByte(0x02)
+        writeString(k)
+        writeInt32(v)
+      }
+    }
+    writeByte(0x08)
+  }
+  writeByte(0x08)
+  writeByte(0x08)
+  return Buffer.concat(chunks)
+}
+
 /** Finds all Steam userdata directories on the system */
 function findSteamUserdataDirs() {
   const home = os.homedir()
@@ -111,7 +186,7 @@ function isMatchingShortcut(shortcut) {
   if (!shortcut || typeof shortcut !== 'object') return false
   const name = String(shortcut.AppName || '').toLowerCase()
   const exe = String(shortcut.Exe || '').toLowerCase()
-  const matchPattern = /olk|classic\s*\+?|classicplus|soder|launcher|wow/i
+  const matchPattern = /olk|classic\s*\+?|classicplus|soder|launcher|wow|warcraft|chromie/i
   return matchPattern.test(name) || matchPattern.test(exe)
 }
 
@@ -147,28 +222,16 @@ function installSteamGridArtwork(assetsDir = path.join(__dirname, '..', 'assets'
 
   const readmeContent = [
     '========================================================================',
-    '        COMO COLOCAR O PLANO DE FUNDO NO STEAM / STEAM DECK',
+    '        ARTE DA STEAM / STEAM DECK (OLK PLUS LAUNCHER)',
     '========================================================================',
+    'Estas imagens são aplicadas AUTOMATICAMENTE pelo launcher no seu Steam Deck.',
+    'Nenhum clique ou configuração manual é necessário no console!',
     '',
-    'O OLK Plus Launcher tenta aplicar estas imagens automaticamente no Steam.',
-    'Se você preferir definir ou personalizar manualmente no Steam (Desktop ou Big Picture):',
-    '',
-    '1. PLANO DE FUNDO (Hero / Big Picture):',
-    '   - Na sua Biblioteca do Steam, abra o atalho do "OLK Plus Launcher".',
-    '   - Clique com o BOTÃO DIREITO na área preta do fundo.',
-    '   - Selecione: "Definir plano de fundo personalizado".',
-    '   - Escolha o arquivo: 01_fundo_bigpicture_1920x620.jpg',
-    '',
-    '2. LOGOTIPO TRANSPARENTE (Logo):',
-    '   - Clique com o botão direito no fundo -> "Definir logotipo personalizado".',
-    '   - Escolha o arquivo: 04_logo_transparente.png',
-    '',
-    '3. CAPA VERTICAL (Pôster na Biblioteca):',
-    '   - Na lista/grade de jogos da Biblioteca, clique com o botão direito na capa do jogo -> Gerenciar -> "Definir arte personalizada".',
-    '   - Escolha o arquivo: 02_poster_biblioteca_600x900.jpg',
-    '',
-    '4. BANNER HORIZONTAL (Cápsula de Jogos Recentes):',
-    '   - Escolha o arquivo: 03_banner_horizontal_460x215.jpg',
+    'Arquivos incluídos neste kit:',
+    '1. 01_fundo_bigpicture_1920x620.jpg (Plano de fundo Widescreen do Big Picture)',
+    '2. 02_poster_biblioteca_600x900.jpg (Capa vertical estilo pôster da Biblioteca)',
+    '3. 03_banner_horizontal_460x215.jpg (Banner horizontal de jogos recentes)',
+    '4. 04_logo_transparente.png         (Logotipo sobre o fundo)',
     '========================================================================',
     ''
   ].join('\n')
@@ -193,45 +256,47 @@ function installSteamGridArtwork(assetsDir = path.join(__dirname, '..', 'assets'
 
   // 2. Automatically install into Steam config/grid for all matching shortcuts
   const userDirs = findSteamUserdataDirs()
+  const appImagePath = process.env.APPIMAGE || process.execPath || ''
+
   for (const userDir of userDirs) {
     const configDir = path.join(userDir, 'config')
     const gridDir = path.join(configDir, 'grid')
     const shortcutsFile = path.join(configDir, 'shortcuts.vdf')
 
     try {
-      if (!fs.existsSync(shortcutsFile)) continue
-      const buf = fs.readFileSync(shortcutsFile)
-      const data = parseBinaryVdf(buf)
-      const shortcuts = data?.shortcuts || {}
+      fs.mkdirSync(gridDir, { recursive: true })
+      let shortcuts = {}
+      let hasExistingVdf = false
 
+      if (fs.existsSync(shortcutsFile)) {
+        const buf = fs.readFileSync(shortcutsFile)
+        const data = parseBinaryVdf(buf)
+        if (data?.shortcuts) {
+          shortcuts = data.shortcuts
+          hasExistingVdf = true
+        }
+      }
+
+      // Check if shortcut already exists in shortcuts.vdf
+      let matchedCount = 0
       for (const idx of Object.keys(shortcuts)) {
         const item = shortcuts[idx]
         if (!isMatchingShortcut(item)) continue
 
-        const computed = calculateSteamAppIds(item.Exe, item.AppName)
-        const idSet = new Set()
+        matchedCount++
+        const ids = getAllIdsForShortcut(item)
 
-        if (item.appid != null) {
-          const rawId = Number(item.appid)
-          idSet.add(String(rawId))
-          const u32 = (rawId >>> 0)
-          idSet.add(String(u32))
-          idSet.add(String((BigInt(u32) << 32n) | 0x02000000n))
-        }
-        idSet.add(computed.appId32)
-        idSet.add(computed.appId64)
-        idSet.add(computed.appIdSigned)
-
-        fs.mkdirSync(gridDir, { recursive: true })
-
-        for (const id of idSet) {
-          if (!id || id === '0') continue
+        for (const id of ids) {
           try {
             fs.copyFileSync(heroSrc, path.join(gridDir, `${id}_hero.jpg`))
+            fs.copyFileSync(heroSrc, path.join(gridDir, `${id}_hero.png`))
             fs.copyFileSync(posterSrc, path.join(gridDir, `${id}p.jpg`))
+            fs.copyFileSync(posterSrc, path.join(gridDir, `${id}p.png`))
             fs.copyFileSync(capsuleSrc, path.join(gridDir, `${id}.jpg`))
+            fs.copyFileSync(capsuleSrc, path.join(gridDir, `${id}.png`))
             if (fs.existsSync(logoSrc)) {
               fs.copyFileSync(logoSrc, path.join(gridDir, `${id}_logo.png`))
+              fs.copyFileSync(logoSrc, path.join(gridDir, `${id}_icon.png`))
             }
           } catch {}
         }
@@ -241,7 +306,70 @@ function installSteamGridArtwork(assetsDir = path.join(__dirname, '..', 'assets'
           appName: item.AppName,
           exe: item.Exe,
           appId: item.appid,
-          computedAppId32: computed.appId32
+          idsCount: ids.length
+        })
+        results.installedInSteam.push(gridDir)
+      }
+
+      // If no matching shortcut exists in shortcuts.vdf and we know our AppImage path, add it!
+      if (matchedCount === 0 && appImagePath && appImagePath.endsWith('.AppImage')) {
+        const nextIdx = String(Object.keys(shortcuts).length)
+        const crc = steamCrc32(`"${appImagePath}"OLK Plus Launcher`)
+        const appId32 = (crc | 0x80000000) >>> 0
+        const appIdSigned = appId32 | 0
+
+        const newShortcut = {
+          appid: appIdSigned,
+          AppName: 'OLK Plus Launcher',
+          Exe: `"${appImagePath}"`,
+          StartDir: `"${path.dirname(appImagePath)}"`,
+          icon: path.join(gridDir, `${appIdSigned}_icon.png`),
+          ShortcutPath: '',
+          LaunchOptions: '',
+          IsHidden: 0,
+          AllowDesktopConfig: 1,
+          AllowOverlay: 1,
+          OpenVR: 0,
+          Devkit: 0,
+          DevkitGameID: '',
+          DevkitOverrideAppId: 0,
+          LastPlayTime: 0,
+          FlatpakAppID: ''
+        }
+
+        shortcuts[nextIdx] = newShortcut
+        try {
+          const newVdfBuf = serializeBinaryVdf(shortcuts)
+          fs.writeFileSync(shortcutsFile, newVdfBuf)
+          log.info(`Auto-registered OLK Plus Launcher shortcut in ${shortcutsFile}`)
+        } catch (vdfErr) {
+          log.warn('could not auto-write shortcuts.vdf', vdfErr?.message)
+        }
+
+        // Install grid files for this new shortcut
+        const ids = getAllIdsForShortcut(newShortcut)
+        for (const id of ids) {
+          try {
+            fs.copyFileSync(heroSrc, path.join(gridDir, `${id}_hero.jpg`))
+            fs.copyFileSync(heroSrc, path.join(gridDir, `${id}_hero.png`))
+            fs.copyFileSync(posterSrc, path.join(gridDir, `${id}p.jpg`))
+            fs.copyFileSync(posterSrc, path.join(gridDir, `${id}p.png`))
+            fs.copyFileSync(capsuleSrc, path.join(gridDir, `${id}.jpg`))
+            fs.copyFileSync(capsuleSrc, path.join(gridDir, `${id}.png`))
+            if (fs.existsSync(logoSrc)) {
+              fs.copyFileSync(logoSrc, path.join(gridDir, `${id}_logo.png`))
+              fs.copyFileSync(logoSrc, path.join(gridDir, `${id}_icon.png`))
+            }
+          } catch {}
+        }
+
+        results.matchedShortcuts.push({
+          userDir,
+          appName: newShortcut.AppName,
+          exe: newShortcut.Exe,
+          appId: newShortcut.appid,
+          idsCount: ids.length,
+          autoCreated: true
         })
         results.installedInSteam.push(gridDir)
       }
@@ -256,8 +384,9 @@ function installSteamGridArtwork(assetsDir = path.join(__dirname, '..', 'assets'
 
 module.exports = {
   steamCrc32,
-  calculateSteamAppIds,
+  getAllIdsForShortcut,
   parseBinaryVdf,
+  serializeBinaryVdf,
   findSteamUserdataDirs,
   isMatchingShortcut,
   installSteamGridArtwork

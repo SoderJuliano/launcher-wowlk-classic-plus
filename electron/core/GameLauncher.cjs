@@ -318,7 +318,7 @@ class GameLauncher {
    * SoderPad.exe turns a controller into keys for the 3.3.5a client.
    * Runs natively on Windows and through Wine on Linux/SteamOS.
    */
-  #startControllerReader(dir, command, env, parentChild) {
+  #startControllerReader(dir, command, defaultArgs, env, parentChild) {
     let reader = path.join(dir, 'SoderPad.exe')
     const bundled = path.join(__dirname, '..', 'bin', 'SoderPad.exe')
     if (fs.existsSync(bundled)) {
@@ -330,7 +330,7 @@ class GameLauncher {
     }
     try {
       const spawnCmd = this.platform === 'win32' ? reader : command
-      const spawnArgs = this.platform === 'win32' ? [] : [reader]
+      const spawnArgs = this.platform === 'win32' ? [] : [...(defaultArgs || []), reader]
       const proc = this.spawn(spawnCmd, spawnArgs, {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
@@ -354,7 +354,7 @@ class GameLauncher {
    * digita.exe types the player's password and hits Enter when the WoW login window appears.
    * Works both natively on Windows and under Wine on Linux / Steam Deck without modifying GlueXML files.
    */
-  #startAutoLogin(dir, command, env, password) {
+  #startAutoLogin(dir, command, defaultArgs, env, password) {
     if (!password) return
     let helper = path.join(dir, 'digita.exe')
     const bundled = path.join(__dirname, '..', 'bin', 'digita.exe')
@@ -364,7 +364,7 @@ class GameLauncher {
     if (!fs.existsSync(helper)) return
     try {
       const spawnCmd = this.platform === 'win32' ? helper : command
-      const spawnArgs = this.platform === 'win32' ? [password] : [helper, password]
+      const spawnArgs = this.platform === 'win32' ? [password] : [...(defaultArgs || []), helper, password]
       const proc = this.spawn(spawnCmd, spawnArgs, {
         cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: true,
       })
@@ -530,6 +530,8 @@ class GameLauncher {
       }
     }
 
+    let defaultArgs = []
+
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
       const internalWine = path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
@@ -537,24 +539,50 @@ class GameLauncher {
       if (!wine.found) throw new LauncherError('WINE_MISSING', 'Wine is required to run the game on this system. Install it (e.g. "sudo pacman -S wine" or "sudo apt install wine") or set its path in Settings.')
       const prefix = cfg.wine.prefix || path.join(this.config.dataDir, 'wineprefix')
       fs.mkdirSync(prefix, { recursive: true })
-      command = wine.path
-      args = [exe]
 
-      const wineBinDir = path.dirname(wine.path)
-      const wineRootDir = path.dirname(wineBinDir)
-      const wineLibDir = path.join(wineRootDir, 'lib')
-      env.PATH = `${wineBinDir}:${env.PATH || ''}`
-      // Nunca prependa /usr/lib ou lib64 em LD_LIBRARY_PATH de binário 32-bit
-      if (!wine.path.startsWith('/usr/bin/')) {
-        env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
+      const protonScript = wine.protonScript || (platform.findProtonScript ? platform.findProtonScript(wine.path) : null)
+      if (wine.isProton && protonScript) {
+        command = protonScript
+        defaultArgs = ['run']
+        args = ['run', exe]
+        env.STEAM_COMPAT_DATA_PATH = prefix
+        const steamDir = [
+          path.join(process.env.HOME || '/home/deck', '.local/share/Steam'),
+          path.join(process.env.HOME || '/home/deck', '.steam/steam'),
+          '/home/deck/.local/share/Steam'
+        ].find((p) => fs.existsSync(p)) || path.join(process.env.HOME || '', '.local/share/Steam')
+        env.STEAM_COMPAT_CLIENT_INSTALL_PATH = steamDir
+        log.info(`Using Proton runner: ${command} with prefix: ${prefix}`)
+      } else {
+        command = wine.path
+        defaultArgs = []
+        args = [exe]
+
+        const wineBinDir = path.dirname(wine.path)
+        const wineRootDir = path.dirname(wineBinDir)
+        const wineLibDir = path.join(wineRootDir, 'lib')
+        env.PATH = `${wineBinDir}:${env.PATH || ''}`
+        // Nunca prependa /usr/lib ou lib64 em LD_LIBRARY_PATH de binário 32-bit
+        if (!wine.path.startsWith('/usr/bin/')) {
+          env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
+        }
       }
+
+      // Limpa LD_PRELOAD de bibliotecas 64-bit da Steam que causam crash no Wine 32-bit
+      if (env.LD_PRELOAD) {
+        env.LD_PRELOAD = env.LD_PRELOAD.split(':').filter(p => !p.includes('gameoverlayrenderer.so')).join(':')
+      }
+
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
+      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano
+      env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
+      env.WINE_CRASH_REPORT_DIR = '/dev/null'
+
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
-      // The package ships DXVK (d3d9.dll/dxgi.dll): make Wine prefer them.
-      env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'd3d9,dxgi=n,b'
+
       // First run: create the prefix before starting the game (racing wineboot breaks RpcSs).
-      if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
+      if (!wine.isProton && !fs.existsSync(path.join(prefix, 'drive_c'))) {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')
         await this.#wineboot(wine.path, env)
       }
@@ -564,7 +592,9 @@ class GameLauncher {
     const child = await new Promise((resolve, reject) => {
       let proc
       try {
-        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
+        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false })
+        proc.stdout?.on('data', (d) => log.info(`[game stdout] ${d.toString().trim()}`))
+        proc.stderr?.on('data', (d) => log.warn(`[game stderr] ${d.toString().trim()}`))
       } catch (err) {
         return reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`))
       }
@@ -576,10 +606,14 @@ class GameLauncher {
       this.running.delete(id)
       log.info(`${id} exited with code ${code}`)
       onExit?.(code)
+      if (this.platform !== 'win32') {
+        try { this.spawn('pkill', ['-f', 'SoderPad.exe'], { stdio: 'ignore' }) } catch {}
+        try { this.spawn('pkill', ['-f', 'digita.exe'], { stdio: 'ignore' }) } catch {}
+      }
     })
     child.unref()
-    this.#startControllerReader(dir, command, env, child)
-    this.#startAutoLogin(dir, command, env, credentials?.password)
+    this.#startControllerReader(dir, command, defaultArgs, env, child)
+    this.#startAutoLogin(dir, command, defaultArgs, env, credentials?.password)
     return { pid: child.pid, command: path.basename(command) }
   }
 }

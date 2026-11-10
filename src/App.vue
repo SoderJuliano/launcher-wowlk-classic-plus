@@ -6,7 +6,24 @@ import LoginView from './components/LoginView.vue'
 import HomeView from './components/HomeView.vue'
 import WallpaperCarousel from './components/WallpaperCarousel.vue'
 
-onMounted(initStore)
+onMounted(() => {
+  initStore()
+  // Steam Deck virtual keyboard deduplicator for Gamescope duplicate synthetic events
+  let lastChar = ''
+  let lastTime = 0
+  window.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertText' && e.data) {
+      const now = performance.now()
+      if (e.data === lastChar && (now - lastTime) < 50) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      lastChar = e.data
+      lastTime = now
+    }
+  }, true)
+})
 const showLogin = computed(() => store.ready && !store.snap?.authenticated && !store.skippedLogin)
 const launcherUpdate = computed(() => store.snap?.launcherUpdate)
 const updatePct = computed(() => {

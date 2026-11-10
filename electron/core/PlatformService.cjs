@@ -55,6 +55,23 @@ function wineVersion(winePath) {
   })
 }
 
+function findProtonScript(winePath) {
+  if (!winePath) return null
+  let dir = path.dirname(winePath)
+  for (let i = 0; i < 4; i++) {
+    const candidate = path.join(dir, 'proton')
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate
+      }
+    } catch {}
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
 function findSteamProtonWineCandidates() {
   const home = process.env.HOME || ''
   if (!home) return []
@@ -137,7 +154,9 @@ async function detectAllWineCandidates(configuredPath = '', extraCandidates = []
       if (fs.existsSync(p)) {
         const ver = await wineVersion(p)
         if (ver) {
-          results.push({ path: p, version: ver, isProton: /proton/i.test(p) })
+          const isProton = /proton/i.test(p)
+          const protonScript = isProton ? findProtonScript(p) : null
+          results.push({ path: p, version: ver, isProton, protonScript })
         }
       }
     } catch {}
@@ -145,7 +164,7 @@ async function detectAllWineCandidates(configuredPath = '', extraCandidates = []
   return results
 }
 
-/** Returns { needed, found, path, version, isInternal, isProton } — Wine is only needed off Windows. */
+/** Returns { needed, found, path, version, isInternal, isProton, protonScript } — Wine is only needed off Windows. */
 async function detectWine(configuredPath, plat = platform, extraCandidates = []) {
   if (plat === 'win32') return { needed: false, found: true, path: null, version: null }
   const extra = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
@@ -167,7 +186,8 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
     if (version) {
       const isInternal = c.includes('runtime/wine')
       const isProton = /proton/i.test(c)
-      return { needed: true, found: true, path: c, version, isInternal, isProton }
+      const protonScript = isProton ? findProtonScript(c) : null
+      return { needed: true, found: true, path: c, version, isInternal, isProton, protonScript }
     }
   }
   return { needed: true, found: false, path: null, version: null }
@@ -185,4 +205,4 @@ function describe() {
   return { platform, arch: process.arch, label: { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }[platform] || platform }
 }
 
-module.exports = { platform, which, detectWine, detectAllWineCandidates, cleanEnvForSystemBinary, freeBytes, describe }
+module.exports = { platform, which, detectWine, detectAllWineCandidates, findProtonScript, cleanEnvForSystemBinary, freeBytes, describe }
