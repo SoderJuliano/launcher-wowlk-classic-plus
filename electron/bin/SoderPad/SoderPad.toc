@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: SoderPad
+## Notes: Controle estilo console: liga sozinho quando um controle conecta.
+## Version: 0.4
+## OptionalDeps: DragonUI
+Classes.lua
+Core.lua
+Nav.lua

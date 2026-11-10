@@ -77,56 +77,62 @@ class GameLauncher {
       try { fs.writeFileSync(fallbackPath, outBuf) } catch {}
     }
 
+    let hasSteamDeckHid = false
     const scanDevices = () => {
       // 1. Steam Deck hidraw (28de:1205)
       try {
         const hidraws = fs.readdirSync('/sys/class/hidraw')
         for (const h of hidraws) {
           const devPath = `/dev/${h}`
-          if (fds.has(devPath)) continue
+          if (fds.has(devPath)) { hasSteamDeckHid = true; continue; }
           try {
             const uevent = fs.readFileSync(`/sys/class/hidraw/${h}/device/uevent`, 'utf8')
             if (/28DE:00001205|28de:1205/i.test(uevent)) {
               const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
               fds.set(devPath, { fd, type: 'steamdeck-hidraw' })
+              hasSteamDeckHid = true
               log.info(`LinuxInputBridge: attached Steam Deck hidraw ${devPath}`)
             }
           } catch {}
         }
       } catch {}
 
-      // 2. Linux joydev (/dev/input/js0..3)
-      for (let i = 0; i < 4; i++) {
-        const devPath = `/dev/input/js${i}`
-        if (fds.has(devPath) || !fs.existsSync(devPath)) continue
-        try {
-          const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
-          fds.set(devPath, { fd, type: 'joydev' })
-          log.info(`LinuxInputBridge: attached joydev ${devPath}`)
-        } catch {}
-      }
-
-      // 3. Linux evdev (/dev/input/event*) para gamepads
-      try {
-        const inputs = fs.readdirSync('/sys/class/input')
-        for (const item of inputs) {
-          if (!item.startsWith('event')) continue
-          const devPath = `/dev/input/${item}`
-          if (fds.has(devPath)) continue
+      // Se o Steam Deck hidraw já foi capturado, não anexa joydev ou evdev do próprio Deck
+      // para evitar que leituras duplicadas com mapeamentos conflitantes sobrescrevam o estado.
+      if (!hasSteamDeckHid) {
+        // 2. Linux joydev (/dev/input/js0..3)
+        for (let i = 0; i < 4; i++) {
+          const devPath = `/dev/input/js${i}`
+          if (fds.has(devPath) || !fs.existsSync(devPath)) continue
           try {
-            const name = fs.readFileSync(`/sys/class/input/${item}/device/name`, 'utf8').trim()
-            const evCap = fs.readFileSync(`/sys/class/input/${item}/device/capabilities/ev`, 'utf8').trim()
-            const evMask = parseInt(evCap, 16)
-            const isPadName = /steam|deck|xbox|x-box|pad|controller|gamepad|dualshock|dualsense|8bitdo|generic\s+x-box/i.test(name)
-            const isNotMouseOrKb = !/mouse|touchpad|trackpad|keyboard|power\s+button|sleep|video\s+bus|hdpi|audio|alsa|hdmi|lid/i.test(name)
-            if ((isPadName || ((evMask & 0x0b) === 0x0b)) && isNotMouseOrKb) {
-              const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
-              fds.set(devPath, { fd, type: 'evdev' })
-              log.info(`LinuxInputBridge: attached evdev ${devPath} (${name})`)
-            }
+            const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+            fds.set(devPath, { fd, type: 'joydev' })
+            log.info(`LinuxInputBridge: attached joydev ${devPath}`)
           } catch {}
         }
-      } catch {}
+
+        // 3. Linux evdev (/dev/input/event*) para gamepads
+        try {
+          const inputs = fs.readdirSync('/sys/class/input')
+          for (const item of inputs) {
+            if (!item.startsWith('event')) continue
+            const devPath = `/dev/input/${item}`
+            if (fds.has(devPath)) continue
+            try {
+              const name = fs.readFileSync(`/sys/class/input/${item}/device/name`, 'utf8').trim()
+              const evCap = fs.readFileSync(`/sys/class/input/${item}/device/capabilities/ev`, 'utf8').trim()
+              const evMask = parseInt(evCap, 16)
+              const isPadName = /steam|deck|xbox|x-box|pad|controller|gamepad|dualshock|dualsense|8bitdo|generic\s+x-box/i.test(name)
+              const isNotMouseOrKb = !/mouse|touchpad|trackpad|keyboard|power\s+button|sleep|video\s+bus|hdpi|audio|alsa|hdmi|lid/i.test(name)
+              if ((isPadName || ((evMask & 0x0b) === 0x0b)) && isNotMouseOrKb) {
+                const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+                fds.set(devPath, { fd, type: 'evdev' })
+                log.info(`LinuxInputBridge: attached evdev ${devPath} (${name})`)
+              }
+            } catch {}
+          }
+        } catch {}
+      }
     }
 
     const parseSteamDeckHid = (buf, len) => {
@@ -145,13 +151,13 @@ class GameLauncher {
       state.btn[5] = (b8 & 0x04) ? 1 : 0 // RB
       state.btn[6] = (b9 & 0x10) ? 1 : 0 // Back
       state.btn[7] = (b9 & 0x40) ? 1 : 0 // Start
-      state.btn[8] = ((b10 & 0x40) || (b9 & 0x80) || (b13 & 0x02)) ? 1 : 0 // L3
-      state.btn[9] = ((b11 & 0x04) || (b10 & 0x01) || (b13 & 0x04)) ? 1 : 0 // R3
+      state.btn[8] = (b10 & 0x40) ? 1 : 0 // L3 (Left thumbstick click)
+      state.btn[9] = (b11 & 0x04) ? 1 : 0 // R3 (Right thumbstick click)
       state.btn[10] = (b9 & 0x01) ? 1 : 0 // D-Pad Up
       state.btn[11] = (b9 & 0x02) ? 1 : 0 // D-Pad Right
       state.btn[12] = (b9 & 0x08) ? 1 : 0 // D-Pad Down
       state.btn[13] = (b9 & 0x04) ? 1 : 0 // D-Pad Left
-      state.btn[14] = (b13 & 0x01) ? 1 : 0 // Paddle L4
+      state.btn[14] = ((b13 & 0x01) || (b9 & 0x80)) ? 1 : 0 // Paddle L4 / L5
 
       const rawLx = buf.readInt16LE(48)
       const rawLy = buf.readInt16LE(50)
@@ -247,8 +253,8 @@ class GameLauncher {
           else if (code === 1) state.ly = -fval
           else if (code === 3) state.rx = fval
           else if (code === 4) state.ry = -fval
-          else if (code === 2 || code === 10) state.lt = val > 128 ? 1 : 0
-          else if (code === 5 || code === 9) state.rt = val > 128 ? 1 : 0
+          else if (code === 10) state.lt = val > 128 ? 1 : 0
+          else if (code === 9) state.rt = val > 128 ? 1 : 0
           else if (code === 16) {
             state.btn[13] = val < 0 ? 1 : 0
             state.btn[11] = val > 0 ? 1 : 0
@@ -396,6 +402,19 @@ class GameLauncher {
         } catch (err) {
           log.warn(`could not copy ${f} to Interface/GlueXML`, err.message)
         }
+      }
+    }
+
+    const soderPadAddonDir = path.join(dir, 'Interface', 'AddOns', 'SoderPad')
+    const bundledAddonDir = path.join(__dirname, '..', 'bin', 'SoderPad')
+    if (fs.existsSync(bundledAddonDir)) {
+      try {
+        fs.mkdirSync(soderPadAddonDir, { recursive: true })
+        for (const file of fs.readdirSync(bundledAddonDir)) {
+          fs.copyFileSync(path.join(bundledAddonDir, file), path.join(soderPadAddonDir, file))
+        }
+      } catch (err) {
+        log.warn('could not sync bundled SoderPad addon', err.message)
       }
     }
 
