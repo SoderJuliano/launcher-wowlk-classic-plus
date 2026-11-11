@@ -171,10 +171,7 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    try {
-      if (process.platform === 'linux') win?.hide()
-      else win?.minimize()
-    } catch {}
+    try { win?.minimize() } catch {}
     return res
   })
   handle('installSteamArt', () => {
@@ -239,12 +236,10 @@ if (process.platform === 'linux' && isSteamDeck()) {
     shuttingDown = true
     try { log.info(`Steam Deck shutdown requested (${reason}): closing game and launcher`) } catch {}
     try { gameLauncher?.shutdownAllSync() } catch (err) { try { log.warn('shutdownAllSync failed', err?.message) } catch {} }
+    process.exit(0)
   }
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
-    process.on(sig, () => {
-      shutdownEverything(sig)
-      app.exit(0)
-    })
+    process.on(sig, () => shutdownEverything(sig))
   }
   app.on('before-quit', () => shutdownEverything('before-quit'))
 }

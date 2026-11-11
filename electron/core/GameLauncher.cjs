@@ -34,16 +34,13 @@ class GameLauncher {
     if (this.platform === 'win32') return
     const { spawnSync } = require('node:child_process')
     for (const [id, child] of this.running.entries()) {
-      try { child.kill('SIGTERM') } catch {}
-      try { process.kill(-child.pid, 'SIGKILL') } catch {}
+      try { child.kill('SIGKILL') } catch {}
+      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL') } catch {} }
     }
     for (const pid of this.helperPids) {
       try { process.kill(pid, 'SIGKILL') } catch {}
     }
-    try { spawnSync('pkill', ['-9', '-f', 'Wow.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
-    try { spawnSync('pkill', ['-9', '-f', 'wineserver'], { timeout: 1000, stdio: 'ignore' }) } catch {}
-    try { spawnSync('pkill', ['-9', '-f', 'SoderPad.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
-    try { spawnSync('pkill', ['-9', '-f', 'digita.exe'], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    try { spawnSync('pkill', ['-9', '-f', 'Wow.exe|wineserver|SoderPad.exe|digita.exe'], { timeout: 800, stdio: 'ignore' }) } catch {}
     this.running.clear()
     this.helperPids.clear()
   }
@@ -481,43 +478,26 @@ class GameLauncher {
       }
     }
 
-    // No Linux / Steam Deck: elimina proxy ponte.c e gerencia d3d9 para evitar deadlock no Steam Deck
+    // No Linux / Steam Deck: restaura d3d9_orig.dll puro (DXVK) eliminando a ponte.c proxy (17 KB)
     if (this.platform !== 'win32') {
-      const onDeck = isSteamDeck()
       try {
         const d3d9Orig = path.join(dir, 'd3d9_orig.dll')
         const d3d9Current = path.join(dir, 'd3d9.dll')
         const d3d9Bak = path.join(dir, 'd3d9.dxvk.bak')
-        if (onDeck) {
-          // No SteamOS (Gamescope / KWin XWayland), o d3d9_orig.dll (DXVK experimental com VK_EXT_present_timing)
-          // entra em deadlock de swapchain na apresentação em tela cheia do Gamescope, gerando tela preta.
-          // Usar o builtin D3D9/DXVK do Wine/Proton (d3d9=b) elimina 100% o travamento em tela preta.
-          if (fs.existsSync(d3d9Current)) {
-            const curSize = fs.statSync(d3d9Current).size
-            if (curSize > 500000 && !fs.existsSync(d3d9Bak)) {
-              fs.renameSync(d3d9Current, d3d9Bak)
-              log.info('Steam Deck: moved experimental DXVK d3d9.dll to d3d9.dxvk.bak to use Proton builtin D3D9/DXVK (fixes black screen)')
-            } else if (curSize > 500000) {
-              fs.unlinkSync(d3d9Current)
-              log.info('Steam Deck: removed experimental DXVK d3d9.dll to use Proton builtin D3D9/DXVK (fixes black screen)')
-            }
+        if (fs.existsSync(d3d9Bak)) {
+          try {
+            if (!fs.existsSync(d3d9Current)) fs.renameSync(d3d9Bak, d3d9Current)
+            else fs.unlinkSync(d3d9Bak)
+          } catch {}
+        }
+        if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
+          if (!fs.existsSync(d3d9Current) || fs.statSync(d3d9Current).size < 100000) {
+            fs.copyFileSync(d3d9Orig, d3d9Current)
+            log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
           }
-        } else {
-          if (fs.existsSync(d3d9Bak)) {
-            try {
-              if (!fs.existsSync(d3d9Current)) fs.renameSync(d3d9Bak, d3d9Current)
-              else fs.unlinkSync(d3d9Bak)
-            } catch {}
-          }
-          if (fs.existsSync(d3d9Orig) && fs.statSync(d3d9Orig).size > 500000) {
-            if (!fs.existsSync(d3d9Current) || fs.statSync(d3d9Current).size < 100000) {
-              fs.copyFileSync(d3d9Orig, d3d9Current)
-              log.info('Restored pure DXVK d3d9.dll on Linux (bypassing ponte.c loader proxy)')
-            }
-          } else if (fs.existsSync(d3d9Current) && fs.statSync(d3d9Current).size < 100000) {
-            fs.unlinkSync(d3d9Current)
-            log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
-          }
+        } else if (fs.existsSync(d3d9Current) && fs.statSync(d3d9Current).size < 100000) {
+          fs.unlinkSync(d3d9Current)
+          log.info('Removed ponte.c d3d9 proxy on Linux to use Wine/Proton builtin D3D9')
         }
       } catch (e) {
         log.warn('could not sanitize d3d9 proxy', e.message)
@@ -609,14 +589,9 @@ class GameLauncher {
 
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
-      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano.
-      // No Steam Deck usa d3d9=b (builtin Proton/Wine) evitando deadlock do DXVK experimental em Wayland/Gamescope
-      const onDeck = isSteamDeck()
-      if (onDeck) {
-        env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9=b;dxgi=n,b'
-      } else {
-        env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
-      }
+      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
+      // e garante que d3d9 use o DXVK da pasta do jogo
+      env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
       env.WINE_CRASH_REPORT_DIR = '/dev/null'
 
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
