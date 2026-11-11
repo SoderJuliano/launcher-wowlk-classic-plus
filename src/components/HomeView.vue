@@ -144,6 +144,7 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
           <div><dt>Client</dt><dd>{{ client.name }}</dd></div>
           <div><dt>Realm</dt><dd>{{ snap.settings.realmlist }}</dd></div>
           <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
+          <div v-if="snap.wine?.needed"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
         </dl>
         <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />

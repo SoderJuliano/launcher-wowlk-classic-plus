@@ -66,11 +66,11 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     const accLine = `SET accountName "${accountName}"`
     text = /^SET accountName .*$/im.test(text) ? text.replace(/^SET accountName .*$/im, accLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${accLine}\r\n`
     if (!/^SET accounttype /im.test(text)) text += `SET accounttype "LK"\r\n`
-    if (password) {
-      const escaped = String(password).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      const listLine = `SET accountList "AUTOLOGIN:${escaped}"`
-      text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
-    }
+  }
+  if (password) {
+    const escaped = String(password).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const listLine = `SET accountList "AUTOLOGIN:${escaped}"`
+    text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
   }
 
   // Previne vídeos de introdução (tela preta no Wine/Steam Deck) e bypassa termos já aceitos

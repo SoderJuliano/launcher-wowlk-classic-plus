@@ -40,14 +40,29 @@ function cleanEnvForSystemBinary(baseEnv = process.env) {
         .join(':')
     }
   }
+  // Remove bibliotecas de overlay do Steam que causam travamento em processos de linha de comando ou filhos do Wine
+  if (env.LD_PRELOAD) {
+    env.LD_PRELOAD = env.LD_PRELOAD
+      .split(':')
+      .filter((p) => p && !p.includes('gameoverlayrenderer') && !p.includes('steam-chat') && !p.includes('.mount_') && (!appDir || !p.startsWith(appDir)))
+      .join(':')
+    if (!env.LD_PRELOAD) delete env.LD_PRELOAD
+  }
   return env
 }
 
 function wineVersion(winePath) {
   if (!winePath) return Promise.resolve(null)
+  try {
+    if (!fs.existsSync(winePath)) return Promise.resolve(null)
+    const st = fs.statSync(winePath)
+    if (!st.isFile()) return Promise.resolve(null)
+  } catch {
+    return Promise.resolve(null)
+  }
   return new Promise((resolve) => {
     const env = cleanEnvForSystemBinary({ ...process.env, WINEDEBUG: '-all' })
-    execFile(winePath, ['--version'], { env, timeout: 8000 }, (err, stdout, stderr) => {
+    execFile(winePath, ['--version'], { env, timeout: 2000 }, (err, stdout, stderr) => {
       const out = (stdout || stderr || '').trim()
       if (out && /wine|proton/i.test(out)) return resolve(out.split('\n')[0])
       resolve(err ? null : (out || 'wine'))
@@ -83,18 +98,38 @@ function findSteamProtonWineCandidates() {
     '/home/deck/.local/share/Steam',
     '/home/deck/.steam/steam'
   ]
+  const seenRoots = new Set()
+  const validRoots = []
+  for (const r of steamRoots) {
+    try {
+      if (fs.existsSync(r)) {
+        const real = fs.realpathSync(r)
+        if (!seenRoots.has(real)) {
+          seenRoots.add(real)
+          validRoots.push(real)
+        }
+      }
+    } catch {}
+  }
+
+  const seenCandidates = new Set()
   const found = []
-  for (const root of steamRoots) {
-    for (const sub of ['steamapps/common', 'compatibilitytools.d']) {
+  for (const root of validRoots) {
+    for (const sub of ['compatibilitytools.d', 'steamapps/common']) {
       const p = path.join(root, sub)
       try {
         if (!fs.existsSync(p)) continue
-        for (const dir of fs.readdirSync(p)) {
+        const dirs = fs.readdirSync(p)
+        dirs.sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }))
+        for (const dir of dirs) {
           if (!/proton|wine/i.test(dir)) continue
           for (const rel of ['dist/bin/wine', 'files/bin/wine', 'bin/wine']) {
             const winePath = path.join(p, dir, rel)
             try {
-              if (fs.existsSync(winePath) && fs.statSync(winePath).isFile()) found.push(winePath)
+              if (!seenCandidates.has(winePath) && fs.existsSync(winePath) && fs.statSync(winePath).isFile()) {
+                seenCandidates.add(winePath)
+                found.push(winePath)
+              }
             } catch { /* ignore */ }
           }
         }
@@ -113,6 +148,7 @@ function findThirdPartyWineCandidates() {
     path.join(home, '.config/heroic/tools/wine'),
     path.join(home, '.config/heroic/tools/proton')
   ]
+  const seen = new Set()
   const found = []
   for (const base of runnerDirs) {
     try {
@@ -121,7 +157,10 @@ function findThirdPartyWineCandidates() {
         for (const rel of ['bin/wine', 'files/bin/wine', 'dist/bin/wine']) {
           const w = path.join(base, dir, rel)
           try {
-            if (fs.existsSync(w) && fs.statSync(w).isFile()) found.push(w)
+            if (!seen.has(w) && fs.existsSync(w) && fs.statSync(w).isFile()) {
+              seen.add(w)
+              found.push(w)
+            }
           } catch {}
         }
       }
@@ -167,27 +206,85 @@ async function detectAllWineCandidates(configuredPath = '', extraCandidates = []
 /** Returns { needed, found, path, version, isInternal, isProton, protonScript } — Wine is only needed off Windows. */
 async function detectWine(configuredPath, plat = platform, extraCandidates = []) {
   if (plat === 'win32') return { needed: false, found: true, path: null, version: null }
-  const extra = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
-  const candidates = [
-    configuredPath,
-    ...extra,
+
+  // 1. Caminho configurado explicitamente
+  if (configuredPath) {
+    try {
+      if (fs.existsSync(configuredPath)) {
+        const ver = await wineVersion(configuredPath)
+        if (ver) {
+          const isProton = /proton/i.test(configuredPath)
+          const protonScript = isProton ? findProtonScript(configuredPath) : null
+          const isInternal = configuredPath.includes('runtime/wine')
+          return { needed: true, found: true, path: configuredPath, version: ver, isInternal, isProton, protonScript }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Extra candidates (ex: runtime interno do launcher)
+  const extras = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
+  for (const extra of extras) {
+    if (extra) {
+      try {
+        if (fs.existsSync(extra)) {
+          const ver = await wineVersion(extra)
+          if (ver) {
+            const isProton = /proton/i.test(extra)
+            const protonScript = isProton ? findProtonScript(extra) : null
+            const isInternal = extra.includes('runtime/wine')
+            return { needed: true, found: true, path: extra, version: ver, isInternal, isProton, protonScript }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 3. Wine do sistema (distro nativa)
+  const sysCandidates = [
     which('wine'),
     which('wine64'),
     '/usr/bin/wine',
     '/usr/bin/wine64',
     '/usr/local/bin/wine',
     '/opt/wine-staging/bin/wine',
-    '/opt/wine/bin/wine',
+    '/opt/wine/bin/wine'
+  ].filter(Boolean)
+  const seenSys = new Set()
+  for (const sc of sysCandidates) {
+    if (seenSys.has(sc)) continue
+    seenSys.add(sc)
+    try {
+      if (fs.existsSync(sc)) {
+        const ver = await wineVersion(sc)
+        if (ver) {
+          return { needed: true, found: true, path: sc, version: ver, isInternal: false, isProton: false, protonScript: null }
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Steam Proton e runners de terceiros (Lutris, Bottles, Heroic)
+  const protonCandidates = [
     ...findSteamProtonWineCandidates(),
     ...findThirdPartyWineCandidates()
-  ].filter(Boolean)
-  for (const c of candidates) {
-    const version = await wineVersion(c)
-    if (version) {
-      const isInternal = c.includes('runtime/wine')
-      return { needed: true, found: true, path: c, version, isInternal, isProton: false, protonScript: null }
-    }
+  ]
+  const seenProton = new Set()
+  for (const pc of protonCandidates) {
+    if (seenProton.has(pc) || seenSys.has(pc)) continue
+    seenProton.add(pc)
+    try {
+      if (fs.existsSync(pc)) {
+        const ver = await wineVersion(pc)
+        if (ver) {
+          const isProton = /proton/i.test(pc)
+          const protonScript = isProton ? findProtonScript(pc) : null
+          return { needed: true, found: true, path: pc, version: ver, isInternal: false, isProton, protonScript }
+        }
+      }
+    } catch {}
   }
+
   return { needed: true, found: false, path: null, version: null }
 }
 
@@ -203,4 +300,4 @@ function describe() {
   return { platform, arch: process.arch, label: { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }[platform] || platform }
 }
 
-module.exports = { platform, which, detectWine, detectAllWineCandidates, findProtonScript, cleanEnvForSystemBinary, freeBytes, describe }
+module.exports = { platform, which, wineVersion, detectWine, detectAllWineCandidates, findProtonScript, cleanEnvForSystemBinary, freeBytes, describe }

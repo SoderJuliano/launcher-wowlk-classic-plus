@@ -150,13 +150,15 @@ class AuthenticationService {
     try {
       const data = fs.readFileSync(this.file)
       let decryptedText = null
+      let needsMigration = false
       if (data.length >= FALLBACK_MAGIC.length && data.subarray(0, FALLBACK_MAGIC.length).equals(FALLBACK_MAGIC)) {
         decryptedText = fallbackDecrypt(data)
       } else if (this.secure?.isEncryptionAvailable && this.secure.isEncryptionAvailable()) {
         try {
           decryptedText = this.secure.decryptString(data)
+          needsMigration = true
         } catch {
-          decryptedText = fallbackDecrypt(data)
+          try { decryptedText = fallbackDecrypt(data) } catch {}
         }
       } else {
         try {
@@ -174,13 +176,23 @@ class AuthenticationService {
         return null
       }
       this.session = { accessToken: '', expiresAt: 0, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt, user: saved.user, password: savedPwd }
-      await this.refresh()
+      try {
+        await this.refresh()
+      } catch (e) {
+        if (e.code === 'SESSION_EXPIRED' || e.code === 'INVALID_REFRESH_TOKEN') {
+          this.session = null
+          this.#forgetDisk()
+          return null
+        }
+      }
       if (savedPwd && this.session) this.session.password = savedPwd
-      return this.session.user
+      if (needsMigration && this.session) {
+        try { this.#persist() } catch {}
+      }
+      return this.session?.user || null
     } catch (err) {
       log.warn('session restore failed', { code: err.code, message: err.message })
       if (err.code === 'SESSION_EXPIRED' || err instanceof SyntaxError) this.#forgetDisk()
-      // Network errors keep the file so the user is signed in next time.
       if (err.code !== 'SESSION_EXPIRED') this.session = null
       return null
     }
@@ -206,7 +218,12 @@ class AuthenticationService {
     })
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     let buf
-    if (this.secure?.isEncryptionAvailable && this.secure.isEncryptionAvailable()) {
+    // No Linux (especialmente Steam Deck com alternância Desktop KDE / Gaming Mode Gamescope),
+    // o safeStorage do Electron usa KWallet/libsecret que só existe no Desktop KDE e falha no Gaming Mode.
+    // Usar AES-256-GCM atrelado ao /etc/machine-id garante persistência unificada entre os modos.
+    if (this.platform === 'linux') {
+      buf = fallbackEncrypt(payload)
+    } else if (this.secure?.isEncryptionAvailable && this.secure.isEncryptionAvailable()) {
       try {
         buf = this.secure.encryptString(payload)
       } catch (err) {

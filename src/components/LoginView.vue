@@ -53,6 +53,7 @@ function openSite() { call('openWebsite').catch(() => {}) }
         <input v-model="form.password" class="input" type="password" autocomplete="current-password" maxlength="64" />
       </label>
       <label class="login__remember"><input v-model="form.remember" type="checkbox" /> Keep me signed in</label>
+      <p class="login__deck-tip">🎮 No Steam Deck, pressione <b>STEAM + X</b> para abrir o teclado.</p>
 
       <button
         type="submit" class="btn btn--gold login__btn" :disabled="busy || apiState === 'offline'"
@@ -83,7 +84,8 @@ function openSite() { call('openWebsite').catch(() => {}) }
 .login__sub { color: var(--text-300); margin: 6px 0 20px; }
 .login__box .field, .login__box .alert { text-align: left; }
 .login__box .alert { margin-bottom: 14px; }
-.login__remember { display: flex; align-items: center; gap: 8px; font-size: .86rem; color: var(--text-200); margin: -2px 0 18px; cursor: pointer; }
+.login__remember { display: flex; align-items: center; gap: 8px; font-size: .86rem; color: var(--text-200); margin: -2px 0 12px; cursor: pointer; }
+.login__deck-tip { font-size: .75rem; color: var(--gold-200); margin: 0 0 14px; opacity: .85; }
 .login__remember input { accent-color: var(--gold-400); width: 16px; height: 16px; }
 .login__btn { width: 100%; height: 48px; font-size: .86rem; }
 .login__foot { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; font-size: .84rem; }

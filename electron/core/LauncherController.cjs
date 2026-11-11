@@ -33,6 +33,9 @@ class LauncherController {
 
   async init() {
     this.wine = await platform.detectWine(this.config.get().wine.path, platform.platform, [this.internalWinePath()])
+    if (this.wine?.found && this.wine?.path && !this.config.get().wine?.path) {
+      try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
+    }
     await this.api.health()
     if (this.api.lastStatus.state === 'online') {
       try {
@@ -49,8 +52,8 @@ class LauncherController {
         this.launcherUpdate = null
         this.#publish()
       }
-      await this.auth.restore()
     }
+    await this.auth.restore()
     await this.refreshManifests()
     this.startPeriodicCheck()
     this.#publish()

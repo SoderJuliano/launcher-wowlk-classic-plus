@@ -563,9 +563,23 @@ class GameLauncher {
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
       const internalWine = path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
-      const wine = await platform.detectWine(cfg.wine.path, this.platform, [internalWine])
-      if (!wine.found) throw new LauncherError('WINE_MISSING', 'Wine is required to run the game on this system. Install it (e.g. "sudo pacman -S wine" or "sudo apt install wine") or set its path in Settings.')
-      const prefix = cfg.wine.prefix || path.join(this.config.dataDir, 'wineprefix')
+      let wine = null
+      if (cfg.wine?.path && fs.existsSync(cfg.wine.path)) {
+        try {
+          const ver = await platform.wineVersion(cfg.wine.path)
+          if (ver) {
+            wine = { needed: true, found: true, path: cfg.wine.path, version: ver, isInternal: cfg.wine.path.includes('runtime/wine'), isProton: /proton/i.test(cfg.wine.path) }
+          }
+        } catch {}
+      }
+      if (!wine) {
+        wine = await platform.detectWine(cfg.wine?.path, this.platform, [internalWine])
+        if (wine.found && wine.path && !cfg.wine?.path) {
+          try { this.config.update({ 'wine.path': wine.path }) } catch {}
+        }
+      }
+      if (!wine || !wine.found) throw new LauncherError('WINE_MISSING', 'Wine is required to run the game on this system. Install it (e.g. "sudo pacman -S wine" or "sudo apt install wine") or set its path in Settings.')
+      const prefix = cfg.wine?.prefix || path.join(this.config.dataDir, 'wineprefix')
       fs.mkdirSync(prefix, { recursive: true })
 
       command = wine.path
