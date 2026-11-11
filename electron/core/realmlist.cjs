@@ -92,28 +92,30 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
   }
 
-  if (process.platform === 'linux') {
+  if (isSteamDeck()) {
     text = text.replace(/^SET windowResizeLock .*\r?\n?/gim, '')
-    const linuxOpts = [
+    const deckOpts = [
+      ['gxResolution', '1280x800'],
       ['gxWindow', '1'],
       ['gxMaximize', '1'],
       ['gxVSync', '0'],
       ['gxTripleBuffer', '0'],
       ['gxFixLag', '0'],
       ['gxCursor', '1'],
+      ['gxMultisample', '1'],
       ['maxFPS', '60'],
       ['maxFPSBk', '30'],
       ['timingMethod', '0'],
       ['Sound_EnableSoundWhenGameIsInBG', '1']
     ]
-    if (isSteamDeck()) {
-      linuxOpts.push(['gxResolution', '1280x800'])
-      linuxOpts.push(['gxMultisample', '1'])
-    }
-    for (const [k, v] of linuxOpts) {
+    for (const [k, v] of deckOpts) {
       const line = `SET ${k} "${v}"`
       const re = new RegExp(`^SET ${k} .*$`, 'im')
       text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
+    }
+  } else if (process.platform === 'linux') {
+    if (!/^SET gxCursor /im.test(text) || /^SET gxCursor "0"/im.test(text)) {
+      text = /^SET gxCursor .*$/im.test(text) ? text.replace(/^SET gxCursor .*$/im, 'SET gxCursor "1"') : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET gxCursor "1"\r\n`
     }
   }
   writeAtomic(cfg, text)
