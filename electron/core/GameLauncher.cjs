@@ -589,7 +589,6 @@ class GameLauncher {
     }
 
     let defaultArgs = []
-    let gameLogFd = null // arquivo, nunca pipe: um pipe para o launcher trava o jogo quando enche
 
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
@@ -635,18 +634,7 @@ class GameLauncher {
       }
 
       env.WINEPREFIX = prefix
-      // Só erros do Wine, gravados em logs/wine.log (ver gameStdio abaixo). Com "-all" e stdio
-      // descartado, uma falha no Modo Jogo não deixava nenhum rastro para investigar.
-      env.WINEDEBUG = env.WINEDEBUG || 'fixme-all'
-      env.DXVK_LOG_LEVEL = env.DXVK_LOG_LEVEL || 'info'
-      try {
-        const logDir = path.join(this.config.dataDir, 'logs')
-        fs.mkdirSync(logDir, { recursive: true })
-        env.DXVK_LOG_PATH = logDir
-        gameLogFd = fs.openSync(path.join(logDir, 'wine.log'), 'w')
-      } catch (e) {
-        log.warn('could not open wine.log', e.message)
-      }
+      env.WINEDEBUG = env.WINEDEBUG || '-all'
       const session = (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || process.env.GAMESCOPE_WAYLAND_DISPLAY) ? 'gamescope (Modo Jogo)' : (process.env.XDG_CURRENT_DESKTOP || 'desktop')
       log.info(`session: ${session}; wine: ${wine.path} (${wine.version}); DISPLAY=${env.DISPLAY || ''}; SteamGameId=${env.SteamGameId || ''}; LD_LIBRARY_PATH=${env.LD_LIBRARY_PATH || ''}; LD_PRELOAD=${env.LD_PRELOAD || ''}`)
       // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
@@ -668,12 +656,9 @@ class GameLauncher {
     const child = await new Promise((resolve, reject) => {
       let proc
       try {
-        const gameStdio = gameLogFd !== null ? ['ignore', gameLogFd, gameLogFd] : 'ignore'
-        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: gameStdio, windowsHide: false })
+        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
       } catch (err) {
         return reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`))
-      } finally {
-        if (gameLogFd !== null) { try { fs.closeSync(gameLogFd) } catch {} }
       }
       proc.once('error', (err) => reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`)))
       proc.once('spawn', () => resolve(proc))

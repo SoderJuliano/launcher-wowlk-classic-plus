@@ -62,10 +62,6 @@ local BARRAS = {
 
 local ligado, desejado, manual = false, false, false
 local ultimoSinal, sinaisRecebidos = 0, 0
--- Gravado por conta. desativado: "Desabilitar controle" nas opcoes. O leitor (SoderPad.exe) le
--- este mesmo valor do arquivo de SavedVariables e para por completo; por isso Aplicar recarrega.
-SoderPadDB = SoderPadDB or {}
-local function Desativado() return SoderPadDB and SoderPadDB.desativado end
 local alfaOriginal = {}
 local raiz, dono, sinais
 local blocos = {}
@@ -114,11 +110,8 @@ local function MacroDeAtaque(classe)
 end
 
 local function MacroDaMagia(nome, classe)
-    if IsHarmfulSpell(nome) then
-        return PEGA_ALVO .. (CORPO_A_CORPO[classe] and "/startattack\n" or "") .. "/cast " .. nome
-    else
-        return "/cast " .. nome
-    end
+    if not IsHarmfulSpell(nome) then return nil end
+    return PEGA_ALVO .. (CORPO_A_CORPO[classe] and "/startattack\n" or "") .. "/cast " .. nome
 end
 
 local function AtualizarCasas()
@@ -232,7 +225,7 @@ end
 
 -- A explicacao dos botoes fixos fica nas opcoes, nao na tela.
 local AJUDA = {
-    "Liga sozinho quando voce mexe no controle; parado ou sem controle, fica em teclado e mouse.",
+    "Liga sozinho quando um controle conecta.",
     " ",
     "|cffffd100Sempre iguais|r",
     "Analogico esquerdo: andar          Analogico direito: camera",
@@ -269,21 +262,6 @@ local function CriarOpcoes()
         t:SetText(linha)
         acima = t
     end
-    -- Desliga tudo: o addon ignora o leitor e o leitor para de ler qualquer aparelho.
-    local caixa = CreateFrame("CheckButton", "SoderPadOpcoesDesabilitar", painel, "InterfaceOptionsCheckButtonTemplate")
-    caixa:SetPoint("TOPLEFT", acima, "BOTTOMLEFT", -2, -14)
-    _G[caixa:GetName() .. "Text"]:SetText("Desabilitar controle")
-    caixa.tooltipText = "Desliga o modo controle por completo. Use se o jogo entrar em modo controle sozinho (fone USB, volante ou outro aparelho confundido com controle)."
-    local aplicar = CreateFrame("Button", "SoderPadOpcoesAplicar", painel, "UIPanelButtonTemplate")
-    aplicar:SetWidth(110)
-    aplicar:SetHeight(22)
-    aplicar:SetPoint("LEFT", _G[caixa:GetName() .. "Text"], "RIGHT", 16, 0)
-    aplicar:SetText("Aplicar")
-    local nota = painel:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-    nota:SetPoint("TOPLEFT", caixa, "BOTTOMLEFT", 4, -2)
-    nota:SetText("Aplicar recarrega a interface. Tambem: /soderpad desabilitar e /soderpad habilitar.")
-    painel:SetScript("OnShow", function() caixa:SetChecked(Desativado() and 1 or nil) end)
-    aplicar:SetScript("OnClick", function() SoderPadDefinirDesativado(caixa:GetChecked() and true or false) end)
     InterfaceOptions_AddCategory(painel)
 end
 
@@ -316,19 +294,11 @@ local function EsconderBarras(esconder)
         local f = _G[nome]
         if f then
             if esconder then
-                if alfaOriginal[nome] == nil then
-                    local a = f:GetAlpha()
-                    alfaOriginal[nome] = (a and a > 0.05) and a or 1
-                end
+                if alfaOriginal[nome] == nil then alfaOriginal[nome] = f:GetAlpha() end
                 f:SetAlpha(0)
-            else
-                local target = alfaOriginal[nome]
-                if not target or target < 0.05 then target = 1 end
-                f:SetAlpha(target)
+            elseif alfaOriginal[nome] ~= nil then
+                f:SetAlpha(alfaOriginal[nome])
                 alfaOriginal[nome] = nil
-                if not f:IsShown() and (nome == "DragonUI_MainActionBar" or nome == "MainMenuBar") then
-                    pcall(f.Show, f)
-                end
             end
         end
     end
@@ -447,8 +417,6 @@ eventos:SetScript("OnEvent", function(_, evento)
         sinais = CreateFrame("Frame", "SoderPadSinais", UIParent)
         local on = CreateFrame("Button", "SoderPadSinalOn", UIParent)
         on:SetScript("OnClick", function()
-            -- O leitor so manda este sinal com o controle em uso (soderpad.c, controleEmUso).
-            if Desativado() then return end
             ultimoSinal = GetTime()
             sinaisRecebidos = sinaisRecebidos + 1
             manual = false
@@ -461,8 +429,6 @@ eventos:SetScript("OnEvent", function(_, evento)
         end)
         SetOverrideBindingClick(sinais, false, "ALT-CTRL-SHIFT-F11", "SoderPadSinalOn")
         SetOverrideBindingClick(sinais, false, "ALT-CTRL-SHIFT-F12", "SoderPadSinalOff")
-        -- Garante que todas as barras de acao estejam 100% visiveis no login
-        EsconderBarras(false)
     elseif evento == "PLAYER_REGEN_ENABLED" then
         Sincronizar()
         if ligado then AtualizarCasas() end
@@ -471,46 +437,15 @@ eventos:SetScript("OnEvent", function(_, evento)
     end
 end)
 
--- Grava a escolha e recarrega: so ao recarregar o jogo escreve o SavedVariables que o leitor le.
-function SoderPadDefinirDesativado(valor)
-    SoderPadDB = SoderPadDB or {}
-    if (SoderPadDB.desativado and true or false) == valor then
-        Escrever(valor and "o controle ja esta desabilitado." or "o controle ja esta habilitado.")
-        return
-    end
-    SoderPadDB.desativado = valor
-    ReloadUI()
-end
-
-local function Destravar()
-    manual = false
-    Pedir(false)
-    if dono and not InCombatLockdown() then ClearOverrideBindings(dono) end
-    EsconderBarras(false)
-end
-
 SLASH_SODERPAD1 = "/soderpad"
 SlashCmdList["SODERPAD"] = function(arg)
-    arg = (arg or ""):lower():gsub("^%s*(.-)%s*$", "%1")
     if arg == "on" then
-        if Desativado() then
-            Escrever("o controle esta desabilitado nas opcoes. Use /soderpad habilitar.")
-            return
-        end
         manual = true
         Pedir(true)
-        Escrever("modo controle ligado a mao (teste sem controle). /soderpad off volta.")
-    elseif arg == "off" or arg == "barras" or arg == "fix" or arg == "reset" then
-        Destravar()
-        Escrever("teclado e mouse: barras restauradas e teclas liberadas.")
-    elseif arg == "desabilitar" or arg == "desativar" or arg == "disable" then
-        SoderPadDefinirDesativado(true)
-    elseif arg == "habilitar" or arg == "ativar" or arg == "enable" then
-        SoderPadDefinirDesativado(false)
+    elseif arg == "off" then
+        manual = false
+        Pedir(false)
     else
-        Escrever("estado: " .. (ligado and "modo controle" or "teclado e mouse")
-            .. (Desativado() and " (controle DESABILITADO nas opcoes)" or "")
-            .. ", sinais do leitor: " .. sinaisRecebidos
-            .. ". Comandos: /soderpad on, off, desabilitar, habilitar.")
+        Escrever("estado: " .. (ligado and "ligado" or "desligado") .. ", sinais do leitor: " .. sinaisRecebidos .. ". Use /soderpad on ou off para testar sem controle.")
     end
 end
