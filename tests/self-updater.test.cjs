@@ -264,3 +264,73 @@ test('PlatformService cleanEnvForSystemBinary strips gameoverlayrenderer and win
   assert.equal(res, null)
   assert.ok(Date.now() - t0 < 50, 'non existent path should return null almost immediately')
 })
+
+test('PlatformService detectWine ignores Proton steamapps runners and realmlist forces windowed mode', async () => {
+  const { detectWine } = require('../electron/core/PlatformService.cjs')
+  const { applyRealmlist } = require('../electron/core/realmlist.cjs')
+  const os = require('node:os')
+  const fs = require('node:fs')
+  const path = require('node:path')
+
+  // 1. detectWine must ignore configuredPath pointing to Steam Proton
+  const fakeProtonPath = '/home/deck/.local/share/Steam/steamapps/common/Proton 9.0 (Beta)/dist/bin/wine'
+  const det = await detectWine(fakeProtonPath, 'linux', [])
+  assert.notEqual(det.path, fakeProtonPath, 'Proton steamapps path must never be selected by detectWine')
+
+  // 2. applyRealmlist forces gxWindow "1" and gxMaximize "0" and scriptErrors "0"
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'olk-realmlist-test-'))
+  try {
+    fs.mkdirSync(path.join(tmpDir, 'Data', 'enUS'), { recursive: true })
+    fs.mkdirSync(path.join(tmpDir, 'WTF'), { recursive: true })
+    fs.writeFileSync(path.join(tmpDir, 'WTF', 'Config.wtf'), 'SET gxMaximize "1"\r\nSET gxWindow "0"\r\nSET scriptErrors "1"\r\nSET windowResizeLock "1"\r\n')
+    const savedDeck = process.env.SteamDeck
+    process.env.SteamDeck = '1' // a janela 1280x800 só é imposta no Steam Deck
+    try {
+      applyRealmlist(tmpDir, '127.0.0.1:3724', 'enUS', 'ADMIN')
+    } finally {
+      if (savedDeck === undefined) delete process.env.SteamDeck; else process.env.SteamDeck = savedDeck
+    }
+    const finalWtf = fs.readFileSync(path.join(tmpDir, 'WTF', 'Config.wtf'), 'utf8')
+    assert.match(finalWtf, /SET gxWindow "1"/, 'gxWindow must be 1')
+    assert.match(finalWtf, /SET gxMaximize "0"/, 'gxMaximize must be 0')
+    assert.match(finalWtf, /SET scriptErrors "0"/, 'scriptErrors must be 0')
+    assert.ok(!finalWtf.includes('SET gxMaximize "1"'), 'gxMaximize 1 must not remain')
+    assert.ok(!finalWtf.includes('SET gxWindow "0"'), 'gxWindow 0 must not remain')
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('cleanEnvForSystemBinary makes the Game Mode environment equal to Desktop Mode (no steam-runtime libs)', () => {
+  const { cleanEnvForSystemBinary } = require('../electron/core/PlatformService.cjs')
+  const rt = '/home/deck/.local/share/Steam/ubuntu12_32/steam-runtime'
+  const cleaned = cleanEnvForSystemBinary({
+    LD_LIBRARY_PATH: `${rt}/pinned_libs_32:${rt}/pinned_libs_64:/usr/lib:/usr/lib32:${rt}/lib/i386-linux-gnu:${rt}/usr/lib/x86_64-linux-gnu:/home/deck/.local/share/Steam/ubuntu12_64`,
+    PATH: `${rt}/amd64/bin:${rt}/amd64/usr/bin:/usr/bin:/bin`,
+    LD_PRELOAD: '/home/deck/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so:/home/deck/.local/share/Steam/ubuntu12_64/gameoverlayrenderer.so',
+    SteamGameId: '123456', DISPLAY: ':1'
+  })
+  assert.equal(cleaned.LD_LIBRARY_PATH, '/usr/lib:/usr/lib32')
+  assert.equal(cleaned.PATH, '/usr/bin:/bin')
+  assert.equal(cleaned.LD_PRELOAD, undefined)
+  assert.equal(cleaned.SteamGameId, '123456', 'Steam identity must stay: gamescope uses it to show the window')
+  assert.equal(cleaned.DISPLAY, ':1')
+  assert.equal(cleanEnvForSystemBinary({ LD_LIBRARY_PATH: `${rt}/lib/i386-linux-gnu` }).LD_LIBRARY_PATH, undefined)
+})
+
+test('detectWine keeps the launcher own Wine even when "--version" does not answer', async () => {
+  const { detectWine } = require('../electron/core/PlatformService.cjs')
+  const os = require('node:os'); const fs = require('node:fs'); const path = require('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'olk-wine-'))
+  try {
+    const internal = path.join(dir, 'runtime', 'wine', 'bin', 'wine')
+    fs.mkdirSync(path.dirname(internal), { recursive: true })
+    fs.writeFileSync(internal, '#!/bin/sh\nexit 1\n', { mode: 0o755 }) // prints nothing, fails
+    const det = await detectWine(null, 'linux', [internal])
+    assert.equal(det.found, true)
+    assert.equal(det.path, internal)
+    assert.equal(det.isInternal, true)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

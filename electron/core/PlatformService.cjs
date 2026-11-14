@@ -23,9 +23,26 @@ function which(cmd) {
   return null
 }
 
+/** Entrada de PATH/LD_LIBRARY_PATH que o cliente Steam injeta ao rodar um atalho não-Steam. */
+function isSteamRuntimePath(p) {
+  return /steam-runtime|\/ubuntu12_(32|64)(\/|$)|\/steamrt|SteamLinuxRuntime/i.test(p)
+}
+
+/**
+ * Ambiente para rodar Wine (ou qualquer binário do sistema) a partir do launcher.
+ * O Modo Desktop funciona porque o launcher herda o ambiente limpo da sessão. No Modo Jogo o
+ * launcher é filho do cliente Steam e herda LD_PRELOAD (overlay) e LD_LIBRARY_PATH/PATH do
+ * "steam-runtime" (bibliotecas antigas de 2012). O Wine e o DXVK do jogo não foram feitos para
+ * elas. Aqui o ambiente do Modo Jogo fica igual ao do Modo Desktop.
+ */
 function cleanEnvForSystemBinary(baseEnv = process.env) {
   const env = { ...baseEnv }
   const appDir = process.env.APPDIR
+  for (const key of ['LD_LIBRARY_PATH', 'PATH']) {
+    if (!env[key]) continue
+    env[key] = env[key].split(':').filter((p) => p && !isSteamRuntimePath(p)).join(':')
+    if (!env[key] && key === 'LD_LIBRARY_PATH') delete env[key]
+  }
   if (appDir) {
     if (env.LD_LIBRARY_PATH) {
       env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
@@ -51,7 +68,7 @@ function cleanEnvForSystemBinary(baseEnv = process.env) {
   return env
 }
 
-function wineVersion(winePath) {
+function wineVersion(winePath, timeoutMs = 2000) {
   if (!winePath) return Promise.resolve(null)
   try {
     if (!fs.existsSync(winePath)) return Promise.resolve(null)
@@ -62,12 +79,16 @@ function wineVersion(winePath) {
   }
   return new Promise((resolve) => {
     const env = cleanEnvForSystemBinary({ ...process.env, WINEDEBUG: '-all' })
-    execFile(winePath, ['--version'], { env, timeout: 2000 }, (err, stdout, stderr) => {
+    execFile(winePath, ['--version'], { env, timeout: timeoutMs }, (err, stdout, stderr) => {
       const out = (stdout || stderr || '').trim()
       if (out && /wine|proton/i.test(out)) return resolve(out.split('\n')[0])
       resolve(err ? null : (out || 'wine'))
     })
   })
+}
+
+function isExecutableFile(p) {
+  try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() } catch { return false }
 }
 
 function findProtonScript(winePath) {
@@ -207,8 +228,8 @@ async function detectAllWineCandidates(configuredPath = '', extraCandidates = []
 async function detectWine(configuredPath, plat = platform, extraCandidates = []) {
   if (plat === 'win32') return { needed: false, found: true, path: null, version: null }
 
-  // 1. Caminho configurado explicitamente
-  if (configuredPath) {
+  // 1. Caminho configurado explicitamente (se não for binário do Proton bruto da Steam)
+  if (configuredPath && !/steamapps.*proton/i.test(configuredPath) && !/proton.*dist\/bin\/wine/i.test(configuredPath)) {
     try {
       if (fs.existsSync(configuredPath)) {
         const ver = await wineVersion(configuredPath)
@@ -225,14 +246,17 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
   // 2. Extra candidates (ex: runtime interno do launcher)
   const extras = Array.isArray(extraCandidates) ? extraCandidates : (extraCandidates ? [extraCandidates] : [])
   for (const extra of extras) {
-    if (extra) {
+    if (extra && !/steamapps.*proton/i.test(extra)) {
       try {
         if (fs.existsSync(extra)) {
-          const ver = await wineVersion(extra)
+          const isInternal = extra.includes('runtime/wine')
+          // O Wine que o próprio launcher baixou vale mesmo se o "--version" não responder a tempo
+          // (primeira execução depois de ligar, cartão SD lento). Antes, um timeout aqui fazia a
+          // detecção cair em outro Wine — no Deck, no binário cru do Proton, que trava.
+          const ver = (await wineVersion(extra, isInternal ? 6000 : 2000)) || (isInternal && isExecutableFile(extra) ? 'wine (interno)' : null)
           if (ver) {
             const isProton = /proton/i.test(extra)
             const protonScript = isProton ? findProtonScript(extra) : null
-            const isInternal = extra.includes('runtime/wine')
             return { needed: true, found: true, path: extra, version: ver, isInternal, isProton, protonScript }
           }
         }
@@ -264,22 +288,18 @@ async function detectWine(configuredPath, plat = platform, extraCandidates = [])
     } catch {}
   }
 
-  // 4. Steam Proton e runners de terceiros (Lutris, Bottles, Heroic)
-  const protonCandidates = [
-    ...findSteamProtonWineCandidates(),
-    ...findThirdPartyWineCandidates()
-  ]
-  const seenProton = new Set()
-  for (const pc of protonCandidates) {
-    if (seenProton.has(pc) || seenSys.has(pc)) continue
-    seenProton.add(pc)
+  // 4. Runners de terceiros padrão (Lutris, Bottles) - NUNCA Proton da Steam por padrão
+  // (binários do Proton dist/bin/wine sem o runtime container da Valve travam o wineserver no SteamOS)
+  const thirdPartyCandidates = findThirdPartyWineCandidates().filter((p) => !/steamapps.*proton/i.test(p) && !/proton.*dist\/bin\/wine/i.test(p))
+  const seenTP = new Set()
+  for (const tc of thirdPartyCandidates) {
+    if (seenTP.has(tc) || seenSys.has(tc)) continue
+    seenTP.add(tc)
     try {
-      if (fs.existsSync(pc)) {
-        const ver = await wineVersion(pc)
+      if (fs.existsSync(tc)) {
+        const ver = await wineVersion(tc)
         if (ver) {
-          const isProton = /proton/i.test(pc)
-          const protonScript = isProton ? findProtonScript(pc) : null
-          return { needed: true, found: true, path: pc, version: ver, isInternal: false, isProton, protonScript }
+          return { needed: true, found: true, path: tc, version: ver, isInternal: false, isProton: false, protonScript: null }
         }
       }
     } catch {}
@@ -300,4 +320,4 @@ function describe() {
   return { platform, arch: process.arch, label: { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }[platform] || platform }
 }
 
-module.exports = { platform, which, wineVersion, detectWine, detectAllWineCandidates, findProtonScript, cleanEnvForSystemBinary, freeBytes, describe }
+module.exports = { platform, which, isExecutableFile, isSteamRuntimePath, wineVersion, detectWine, detectAllWineCandidates, findProtonScript, cleanEnvForSystemBinary, freeBytes, describe }

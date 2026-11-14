@@ -472,6 +472,7 @@ relogio:SetScript("OnEvent", function(_, evento)
         return
     end
     dono = CreateFrame("Frame", "SoderPadNavDono", UIParent)
+    ClearOverrideBindings(dono)
     moldura = CreateFrame("Frame", "SoderPadNavMoldura", UIParent)
     moldura:SetFrameStrata("TOOLTIP")
     moldura:Hide()

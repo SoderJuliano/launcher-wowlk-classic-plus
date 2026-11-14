@@ -171,7 +171,11 @@ function registerIpc() {
   handle('cancel', () => controller.cancel())
   handle('play', async (id) => {
     const res = await controller.play(String(id))
-    try { win?.minimize() } catch {}
+    // No Windows minimiza; no Linux / Steam Deck NUNCA minimiza
+    // (no Gamescope / SteamOS minimizar oculta a janela e trava na tela de loading da Steam com spinner infinito)
+    if (process.platform === 'win32') {
+      try { win?.minimize() } catch {}
+    }
     return res
   })
   handle('installSteamArt', () => {
@@ -226,15 +230,15 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-// Steam Deck: "Sair do jogo" pelo botão Steam (Modo Jogo) ou "Encerrar sessão" manda SIGTERM ao launcher.
-// O Wow.exe roda via Wine/Proton em processos detached; se o launcher sai sem derrubá-los, o SteamOS
-// fica preso em "saindo do jogo". Aqui encerramos jogo + wineserver + auxiliares e depois o launcher.
-if (process.platform === 'linux' && isSteamDeck()) {
+// Linux / Steam Deck: "Sair do jogo" pelo botão Steam (Modo Jogo), "Encerrar sessão" ou fechar janela
+// envia SIGTERM/SIGINT. Encerra imediatamente Wow.exe + wineserver + auxiliares com SIGKILL
+// para liberar leases de GPU/DRM e evitar que o SteamOS congele na tela de encerramento.
+if (process.platform === 'linux') {
   let shuttingDown = false
   const shutdownEverything = (reason) => {
     if (shuttingDown) return
     shuttingDown = true
-    try { log.info(`Steam Deck shutdown requested (${reason}): closing game and launcher`) } catch {}
+    try { log.info(`Linux shutdown requested (${reason}): closing game and launcher`) } catch {}
     try { gameLauncher?.shutdownAllSync() } catch (err) { try { log.warn('shutdownAllSync failed', err?.message) } catch {} }
     process.exit(0)
   }

@@ -14,6 +14,34 @@ const platform = require('./PlatformService.cjs')
 const { isSteamDeck } = require('./realmlist.cjs')
 const log = require('./logger.cjs')
 
+/** Testa um bit num bitmap de capabilities do sysfs (palavras hex, a mais significativa primeiro). */
+function capBit(bitmap, bit) {
+  const words = String(bitmap || '').trim().split(/\s+/).filter(Boolean)
+  if (!words.length) return false
+  const bitsPerWord = Math.max(...words.map((w) => w.length)) > 8 ? 64 : 32
+  const idx = words.length - 1 - Math.floor(bit / bitsPerWord)
+  if (idx < 0) return false
+  try { return ((BigInt('0x' + words[idx]) >> BigInt(bit % bitsPerWord)) & 1n) === 1n } catch { return false }
+}
+
+/**
+ * Um aparelho de entrada só é controle se tiver analógico (ABS_X e ABS_Y) E botão de controle
+ * (BTN_SOUTH/BTN_GAMEPAD 0x130, ou BTN_TRIGGER/BTN_JOYSTICK 0x120 nos genéricos).
+ * Antes bastava "tem teclas + tem eixo absoluto" ou a palavra "pad" no nome, e um fone USB
+ * (teclas de mídia + eixo de volume) virava controle e prendia o jogo em modo controle.
+ */
+function isGamepadCaps({ ev, key, abs }) {
+  const evMask = parseInt(String(ev || '0').trim().split(/\s+/).pop(), 16) || 0
+  if ((evMask & 0x0a) !== 0x0a) return false            // EV_KEY e EV_ABS
+  if (!capBit(abs, 0) || !capBit(abs, 1)) return false  // ABS_X e ABS_Y
+  return capBit(key, 0x130) || capBit(key, 0x120)
+}
+
+function isGamepadSysfs(sysDir) {
+  const read = (f) => { try { return fs.readFileSync(path.join(sysDir, 'capabilities', f), 'utf8') } catch { return '' } }
+  return isGamepadCaps({ ev: read('ev'), key: read('key'), abs: read('abs') })
+}
+
 class GameLauncher {
   constructor({ config, installer, spawnImpl, platformName }) {
     this.config = config
@@ -40,7 +68,11 @@ class GameLauncher {
     for (const pid of this.helperPids) {
       try { process.kill(pid, 'SIGKILL') } catch {}
     }
-    try { spawnSync('pkill', ['-9', '-f', 'Wow.exe|wineserver|SoderPad.exe|digita.exe'], { timeout: 800, stdio: 'ignore' }) } catch {}
+    const targets = ['Wow.exe', 'wineserver', 'SoderPad.exe', 'digita.exe']
+    try { spawnSync('killall', ['-9', ...targets], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    for (const t of targets) {
+      try { spawnSync('pkill', ['-9', '-f', t], { timeout: 1000, stdio: 'ignore' }) } catch {}
+    }
     this.running.clear()
     this.helperPids.clear()
   }
@@ -99,6 +131,7 @@ class GameLauncher {
 
     let hasSteamDeckHid = false
     const scanDevices = () => {
+      const isGamepadDevice = (sysDir) => isGamepadSysfs(sysDir)
       // 1. Steam Deck hidraw (28de:1205)
       try {
         const hidraws = fs.readdirSync('/sys/class/hidraw')
@@ -124,6 +157,7 @@ class GameLauncher {
         for (let i = 0; i < 4; i++) {
           const devPath = `/dev/input/js${i}`
           if (fds.has(devPath) || !fs.existsSync(devPath)) continue
+          if (!isGamepadDevice(`/sys/class/input/js${i}/device`)) continue
           try {
             const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
             fds.set(devPath, { fd, type: 'joydev' })
@@ -140,11 +174,7 @@ class GameLauncher {
             if (fds.has(devPath)) continue
             try {
               const name = fs.readFileSync(`/sys/class/input/${item}/device/name`, 'utf8').trim()
-              const evCap = fs.readFileSync(`/sys/class/input/${item}/device/capabilities/ev`, 'utf8').trim()
-              const evMask = parseInt(evCap, 16)
-              const isPadName = /steam|deck|xbox|x-box|pad|controller|gamepad|dualshock|dualsense|8bitdo|generic\s+x-box/i.test(name)
-              const isNotMouseOrKb = !/mouse|touchpad|trackpad|keyboard|power\s+button|sleep|video\s+bus|hdpi|audio|alsa|hdmi|lid/i.test(name)
-              if ((isPadName || ((evMask & 0x0b) === 0x0b)) && isNotMouseOrKb) {
+              if (isGamepadDevice(`/sys/class/input/${item}/device`)) {
                 const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
                 fds.set(devPath, { fd, type: 'evdev' })
                 log.info(`LinuxInputBridge: attached evdev ${devPath} (${name})`)
@@ -559,22 +589,25 @@ class GameLauncher {
     }
 
     let defaultArgs = []
+    let gameLogFd = null // arquivo, nunca pipe: um pipe para o launcher trava o jogo quando enche
 
     if (this.platform !== 'win32') {
       const cfg = this.config.get()
       const internalWine = path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
       let wine = null
-      if (cfg.wine?.path && fs.existsSync(cfg.wine.path)) {
+      const savedWine = cfg.wine?.path
+      if (savedWine && !/steamapps.*proton/i.test(savedWine) && !/proton.*dist\/bin\/wine/i.test(savedWine) && fs.existsSync(savedWine)) {
         try {
-          const ver = await platform.wineVersion(cfg.wine.path)
+          const isInternal = savedWine.includes('runtime/wine')
+          const ver = (await platform.wineVersion(savedWine, isInternal ? 6000 : 2000)) || (isInternal && platform.isExecutableFile(savedWine) ? 'wine (interno)' : null)
           if (ver) {
-            wine = { needed: true, found: true, path: cfg.wine.path, version: ver, isInternal: cfg.wine.path.includes('runtime/wine'), isProton: /proton/i.test(cfg.wine.path) }
+            wine = { needed: true, found: true, path: savedWine, version: ver, isInternal, isProton: false }
           }
         } catch {}
       }
       if (!wine) {
-        wine = await platform.detectWine(cfg.wine?.path, this.platform, [internalWine])
-        if (wine.found && wine.path && !cfg.wine?.path) {
+        wine = await platform.detectWine(null, this.platform, [internalWine])
+        if (wine.found && wine.path && !wine.isProton) {
           try { this.config.update({ 'wine.path': wine.path }) } catch {}
         }
       }
@@ -602,7 +635,20 @@ class GameLauncher {
       }
 
       env.WINEPREFIX = prefix
-      env.WINEDEBUG = env.WINEDEBUG || '-all'
+      // Só erros do Wine, gravados em logs/wine.log (ver gameStdio abaixo). Com "-all" e stdio
+      // descartado, uma falha no Modo Jogo não deixava nenhum rastro para investigar.
+      env.WINEDEBUG = env.WINEDEBUG || 'fixme-all'
+      env.DXVK_LOG_LEVEL = env.DXVK_LOG_LEVEL || 'info'
+      try {
+        const logDir = path.join(this.config.dataDir, 'logs')
+        fs.mkdirSync(logDir, { recursive: true })
+        env.DXVK_LOG_PATH = logDir
+        gameLogFd = fs.openSync(path.join(logDir, 'wine.log'), 'w')
+      } catch (e) {
+        log.warn('could not open wine.log', e.message)
+      }
+      const session = (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || process.env.GAMESCOPE_WAYLAND_DISPLAY) ? 'gamescope (Modo Jogo)' : (process.env.XDG_CURRENT_DESKTOP || 'desktop')
+      log.info(`session: ${session}; wine: ${wine.path} (${wine.version}); DISPLAY=${env.DISPLAY || ''}; SteamGameId=${env.SteamGameId || ''}; LD_LIBRARY_PATH=${env.LD_LIBRARY_PATH || ''}; LD_PRELOAD=${env.LD_PRELOAD || ''}`)
       // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
       // e garante que d3d9 use o DXVK da pasta do jogo
       env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
@@ -622,9 +668,12 @@ class GameLauncher {
     const child = await new Promise((resolve, reject) => {
       let proc
       try {
-        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
+        const gameStdio = gameLogFd !== null ? ['ignore', gameLogFd, gameLogFd] : 'ignore'
+        proc = this.spawn(command, args, { cwd: dir, env, detached: true, stdio: gameStdio, windowsHide: false })
       } catch (err) {
         return reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`))
+      } finally {
+        if (gameLogFd !== null) { try { fs.closeSync(gameLogFd) } catch {} }
       }
       proc.once('error', (err) => reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`)))
       proc.once('spawn', () => resolve(proc))
@@ -646,4 +695,4 @@ class GameLauncher {
   }
 }
 
-module.exports = { GameLauncher }
+module.exports = { GameLauncher, isGamepadCaps, capBit }

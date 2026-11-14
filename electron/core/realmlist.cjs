@@ -92,8 +92,17 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
   }
 
+  // Steam Deck (Modo Desktop e Modo Jogo): sempre janela 1280x800.
+  // 1. Tela cheia exclusiva (gxWindow "0") ou maximizada sem borda (gxMaximize "1") com este Wine
+  //    deu tela preta e travou o aparelho em todos os testes.
+  // 2. No Modo Jogo não existe "janela": o Gamescope mostra a janela do jogo ocupando a tela
+  //    inteira (a tela do Deck é exatamente 1280x800; numa TV ele amplia). A barra de baixo só
+  //    aparece no Modo Desktop, que é o painel do KDE.
+  // Nos outros Linux a resolução e o modo de janela são escolha do jogador; só garante o cursor.
   if (isSteamDeck()) {
-    text = text.replace(/^SET windowResizeLock .*\r?\n?/gim, '')
+    for (const k of ['windowResizeLock', 'gxWindow', 'gxMaximize', 'gxResolution', 'scriptErrors']) {
+      text = text.replace(new RegExp(`^SET ${k} .*\\r?\\n?`, 'gim'), '')
+    }
     const deckOpts = [
       ['gxResolution', '1280x800'],
       ['gxWindow', '1'],
@@ -106,6 +115,7 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
       ['maxFPS', '60'],
       ['maxFPSBk', '30'],
       ['timingMethod', '0'],
+      ['scriptErrors', '0'],
       ['Sound_EnableSoundWhenGameIsInBG', '1']
     ]
     for (const [k, v] of deckOpts) {

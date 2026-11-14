@@ -32,8 +32,13 @@ class LauncherController {
   }
 
   async init() {
-    this.wine = await platform.detectWine(this.config.get().wine.path, platform.platform, [this.internalWinePath()])
-    if (this.wine?.found && this.wine?.path && !this.config.get().wine?.path) {
+    const savedWine = this.config.get().wine?.path
+    if (savedWine && (/steamapps.*proton/i.test(savedWine) || /proton.*dist\/bin\/wine/i.test(savedWine))) {
+      log.warn('Purging invalid Proton runner from settings.json:', savedWine)
+      try { this.config.update({ 'wine.path': null }) } catch {}
+    }
+    this.wine = await platform.detectWine(this.config.get().wine?.path, platform.platform, [this.internalWinePath()])
+    if (this.wine?.found && this.wine?.path && !this.config.get().wine?.path && !this.wine.isProton) {
       try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
     }
     await this.api.health()
@@ -354,7 +359,10 @@ class LauncherController {
 
       try { fs.unlinkSync(archiveDest) } catch { /* ignore */ }
 
-      this.wine = await platform.detectWine(this.config.get().wine.path, platform.platform, [this.internalWinePath()])
+      this.wine = await platform.detectWine(null, platform.platform, [this.internalWinePath()])
+      if (this.wine?.found && this.wine?.path) {
+        try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
+      }
       log.info('internal wine runtime installed successfully', this.wine)
     } catch (err) {
       log.error('failed to install wine runtime', toPlain(err))

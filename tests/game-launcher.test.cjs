@@ -109,3 +109,15 @@ test('real process start on this OS (copy of a system binary as Wow.exe)', { ski
   const code = await new Promise((resolve, reject) => launcher.launch('wow32', { onExit: resolve }).catch(reject))
   assert.equal(code, 0)
 })
+
+test('Linux input bridge: USB headset is not a gamepad, real pads are', () => {
+  const { isGamepadCaps } = require('../electron/core/GameLauncher.cjs')
+  // THI Headphone Captain 780 (4c4a:4455): media keys + ABS_VOLUME/ABS_MISC. It used to match "EV_KEY + EV_ABS".
+  assert.equal(isGamepadCaps({ ev: '1b', key: '1000000018000 7800000000 8e000000000000 0', abs: '10100000000' }), false)
+  // Keyboard, and a device with sticks but no gamepad buttons.
+  assert.equal(isGamepadCaps({ ev: '120013', key: '1000000000007 ff9f207ac14057ff febeffdfffefffff fffffffffffffffe', abs: '' }), false)
+  assert.equal(isGamepadCaps({ ev: '1b', key: '1000000018000 7800000000 8e000000000000 0', abs: '3' }), false)
+  // Xbox-style pad (BTN_SOUTH..BTN_THUMBR) and a generic DirectInput pad (BTN_TRIGGER..).
+  assert.equal(isGamepadCaps({ ev: '20000b', key: '7cdb000000000000 0 0 0 0', abs: '3003f' }), true)
+  assert.equal(isGamepadCaps({ ev: '1b', key: 'fff00000000 0 0 0 0', abs: '30027' }), true)
+})
