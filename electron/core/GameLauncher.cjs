@@ -42,6 +42,53 @@ function isGamepadSysfs(sysDir) {
   return isGamepadCaps({ ev: read('ev'), key: read('key'), abs: read('abs') })
 }
 
+/**
+ * Decodifica o pacote HID bruto 0x01/0x09 do Steam Deck (28de:1205).
+ * No HID bruto da Valve, sLeftStickY (offset 50) e sRightStickY (offset 54) sao positivos para cima
+ * (por isso o SDL e o hid-steam negam esses eixos para virar -cima/+baixo). O SoderPad usa a mesma
+ * convencao +cima/-baixo do HID bruto e do XInput, entao ly e ry NAO devem ser negados.
+ */
+function parseSteamDeckHidReport(buf, len, state) {
+  if (len < 64 || buf[0] !== 0x01 || buf[2] !== 0x09) return false
+  const b8 = buf[8]
+  const b9 = buf[9]
+  const b10 = buf[10]
+  const b11 = buf[11]
+  const b13 = buf[13]
+
+  state.btn[0] = (b8 & 0x80) ? 1 : 0 // A
+  state.btn[1] = (b8 & 0x20) ? 1 : 0 // B
+  state.btn[2] = (b8 & 0x40) ? 1 : 0 // X
+  state.btn[3] = (b8 & 0x10) ? 1 : 0 // Y
+  state.btn[4] = (b8 & 0x08) ? 1 : 0 // LB
+  state.btn[5] = (b8 & 0x04) ? 1 : 0 // RB
+  state.btn[6] = (b9 & 0x10) ? 1 : 0 // Back
+  state.btn[7] = (b9 & 0x40) ? 1 : 0 // Start
+  state.btn[8] = (b10 & 0x40) ? 1 : 0 // L3 (Left thumbstick click)
+  state.btn[9] = (b11 & 0x04) ? 1 : 0 // R3 (Right thumbstick click)
+  state.btn[10] = (b9 & 0x01) ? 1 : 0 // D-Pad Up
+  state.btn[11] = (b9 & 0x02) ? 1 : 0 // D-Pad Right
+  state.btn[12] = (b9 & 0x08) ? 1 : 0 // D-Pad Down
+  state.btn[13] = (b9 & 0x04) ? 1 : 0 // D-Pad Left
+  state.btn[14] = ((b13 & 0x01) || (b9 & 0x80)) ? 1 : 0 // Paddle L4 / L5
+
+  const rawLx = buf.readInt16LE(48)
+  const rawLy = buf.readInt16LE(50)
+  const rawRx = buf.readInt16LE(52)
+  const rawRy = buf.readInt16LE(54)
+  state.lx = rawLx < 0 ? rawLx / 32768.0 : rawLx / 32767.0
+  state.ly = rawLy < 0 ? rawLy / 32768.0 : rawLy / 32767.0
+  state.rx = rawRx < 0 ? rawRx / 32768.0 : rawRx / 32767.0
+  state.ry = rawRy < 0 ? rawRy / 32768.0 : rawRy / 32767.0
+
+  const rawLt = buf.readUInt16LE(44)
+  const rawRt = buf.readUInt16LE(46)
+  state.lt = (b8 & 0x02) || (rawLt > 8000) ? 1 : 0
+  state.rt = (b8 & 0x01) || (rawRt > 8000) ? 1 : 0
+  state.active = true
+  return true
+}
+
 class GameLauncher {
   constructor({ config, installer, spawnImpl, platformName }) {
     this.config = config
@@ -125,12 +172,16 @@ class GameLauncher {
       outBuf.writeFloatLE(state.ly, 36)
       outBuf.writeFloatLE(state.rx, 40)
       outBuf.writeFloatLE(state.ry, 44)
-      try { fs.writeFileSync(shmPath, outBuf) } catch {}
-      try { fs.writeFileSync(fallbackPath, outBuf) } catch {}
+      const atomicWrite = (target) => {
+        const tmp = `${target}.tmp`
+        try { fs.writeFileSync(tmp, outBuf); fs.renameSync(tmp, target) } catch {}
+      }
+      atomicWrite(shmPath)
+      atomicWrite(fallbackPath)
     }
 
-    let hasSteamDeckHid = false
     const scanDevices = () => {
+      let hasSteamDeckHid = false
       const isGamepadDevice = (sysDir) => isGamepadSysfs(sysDir)
       // 1. Steam Deck hidraw (28de:1205)
       try {
@@ -165,7 +216,7 @@ class GameLauncher {
           } catch {}
         }
 
-        // 3. Linux evdev (/dev/input/event*) para gamepads
+        // 3. Linux evdev (/dev/input/event*) apenas quando nao ha joydev para o mesmo controle
         try {
           const inputs = fs.readdirSync('/sys/class/input')
           for (const item of inputs) {
@@ -173,8 +224,11 @@ class GameLauncher {
             const devPath = `/dev/input/${item}`
             if (fds.has(devPath)) continue
             try {
-              const name = fs.readFileSync(`/sys/class/input/${item}/device/name`, 'utf8').trim()
-              if (isGamepadDevice(`/sys/class/input/${item}/device`)) {
+              const sysDev = `/sys/class/input/${item}/device`
+              const hasJoydevSibling = fs.readdirSync(sysDev).some((e) => /^js\d+$/.test(e) && fds.has(`/dev/input/${e}`))
+              if (hasJoydevSibling) continue
+              const name = fs.readFileSync(`${sysDev}/name`, 'utf8').trim()
+              if (isGamepadDevice(sysDev)) {
                 const fd = fs.openSync(devPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
                 fds.set(devPath, { fd, type: 'evdev' })
                 log.info(`LinuxInputBridge: attached evdev ${devPath} (${name})`)
@@ -185,46 +239,7 @@ class GameLauncher {
       }
     }
 
-    const parseSteamDeckHid = (buf, len) => {
-      if (len < 64 || buf[0] !== 0x01 || buf[2] !== 0x09) return false
-      const b8 = buf[8]
-      const b9 = buf[9]
-      const b10 = buf[10]
-      const b11 = buf[11]
-      const b13 = buf[13]
-
-      state.btn[0] = (b8 & 0x80) ? 1 : 0 // A
-      state.btn[1] = (b8 & 0x20) ? 1 : 0 // B
-      state.btn[2] = (b8 & 0x40) ? 1 : 0 // X
-      state.btn[3] = (b8 & 0x10) ? 1 : 0 // Y
-      state.btn[4] = (b8 & 0x08) ? 1 : 0 // LB
-      state.btn[5] = (b8 & 0x04) ? 1 : 0 // RB
-      state.btn[6] = (b9 & 0x10) ? 1 : 0 // Back
-      state.btn[7] = (b9 & 0x40) ? 1 : 0 // Start
-      state.btn[8] = (b10 & 0x40) ? 1 : 0 // L3 (Left thumbstick click)
-      state.btn[9] = (b11 & 0x04) ? 1 : 0 // R3 (Right thumbstick click)
-      state.btn[10] = (b9 & 0x01) ? 1 : 0 // D-Pad Up
-      state.btn[11] = (b9 & 0x02) ? 1 : 0 // D-Pad Right
-      state.btn[12] = (b9 & 0x08) ? 1 : 0 // D-Pad Down
-      state.btn[13] = (b9 & 0x04) ? 1 : 0 // D-Pad Left
-      state.btn[14] = ((b13 & 0x01) || (b9 & 0x80)) ? 1 : 0 // Paddle L4 / L5
-
-      const rawLx = buf.readInt16LE(48)
-      const rawLy = buf.readInt16LE(50)
-      const rawRx = buf.readInt16LE(52)
-      const rawRy = buf.readInt16LE(54)
-      state.lx = rawLx < 0 ? rawLx / 32768.0 : rawLx / 32767.0
-      state.ly = rawLy < 0 ? -rawLy / 32768.0 : -rawLy / 32767.0
-      state.rx = rawRx < 0 ? rawRx / 32768.0 : rawRx / 32767.0
-      state.ry = rawRy < 0 ? -rawRy / 32768.0 : -rawRy / 32767.0
-
-      const rawLt = buf.readUInt16LE(44)
-      const rawRt = buf.readUInt16LE(46)
-      state.lt = (b8 & 0x02) || (rawLt > 8000) ? 1 : 0
-      state.rt = (b8 & 0x01) || (rawRt > 8000) ? 1 : 0
-      state.active = true
-      return true
-    }
+    const parseSteamDeckHid = (buf, len) => parseSteamDeckHidReport(buf, len, state)
 
     const parseJoydev = (buf, len) => {
       let updated = false
@@ -303,8 +318,8 @@ class GameLauncher {
           else if (code === 1) state.ly = -fval
           else if (code === 3) state.rx = fval
           else if (code === 4) state.ry = -fval
-          else if (code === 10) state.lt = val > 128 ? 1 : 0
-          else if (code === 9) state.rt = val > 128 ? 1 : 0
+          else if (code === 2 || code === 10) state.lt = val > 128 ? 1 : 0
+          else if (code === 5 || code === 9) state.rt = val > 128 ? 1 : 0
           else if (code === 16) {
             state.btn[13] = val < 0 ? 1 : 0
             state.btn[11] = val > 0 ? 1 : 0
@@ -359,7 +374,9 @@ class GameLauncher {
         }
         fds.clear()
         try { fs.unlinkSync(shmPath) } catch {}
+        try { fs.unlinkSync(`${shmPath}.tmp`) } catch {}
         try { fs.unlinkSync(fallbackPath) } catch {}
+        try { fs.unlinkSync(`${fallbackPath}.tmp`) } catch {}
       })
     }
   }
@@ -680,4 +697,4 @@ class GameLauncher {
   }
 }
 
-module.exports = { GameLauncher, isGamepadCaps, capBit }
+module.exports = { GameLauncher, isGamepadCaps, capBit, parseSteamDeckHidReport }

@@ -121,3 +121,25 @@ test('Linux input bridge: USB headset is not a gamepad, real pads are', () => {
   assert.equal(isGamepadCaps({ ev: '20000b', key: '7cdb000000000000 0 0 0 0', abs: '3003f' }), true)
   assert.equal(isGamepadCaps({ ev: '1b', key: 'fff00000000 0 0 0 0', abs: '30027' }), true)
 })
+
+test('Steam Deck HID parser: Left/Right sticks preserve +up/-down polarity and D-pad never alters sticks', () => {
+  const { parseSteamDeckHidReport } = require('../electron/core/GameLauncher.cjs')
+  const state = { btn: new Uint8Array(16), lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, active: false }
+  const pkt = Buffer.alloc(64)
+  pkt[0] = 0x01
+  pkt[2] = 0x09
+  // Push left stick full UP (+32767) and right stick full DOWN (-32768), with D-Pad Up pressed (b9 & 0x01).
+  pkt[9] = 0x01
+  pkt.writeInt16LE(0, 48)
+  pkt.writeInt16LE(32767, 50)
+  pkt.writeInt16LE(0, 52)
+  pkt.writeInt16LE(-32768, 54)
+
+  assert.equal(parseSteamDeckHidReport(pkt, 64, state), true)
+  assert.equal(state.ly, 1.0)
+  assert.equal(state.ry, -1.0)
+  assert.equal(state.lx, 0)
+  assert.equal(state.rx, 0)
+  assert.equal(state.btn[10], 1) // D-Pad Up
+  assert.equal(state.btn[11], 0)
+})
