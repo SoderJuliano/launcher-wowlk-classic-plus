@@ -3,14 +3,18 @@
 -- tudo volta a controlar o personagem. So fora de combate: o jogo proibe trocar teclas em combate.
 
 -- Do mais para o menos prioritario. Janela modal esconde o resto.
-local MODAIS = { "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4", "DropDownList2", "DropDownList1" }
+local MODAIS = {
+    "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4",
+    "DragonUIMenu3", "DragonUIMenu2", "DragonUIMenu",
+    "DropDownList2", "DropDownList1",
+}
 local JANELAS = {
     "GameMenuFrame", "VideoOptionsFrame", "AudioOptionsFrame", "InterfaceOptionsFrame", "KeyBindingFrame",
     "LootFrame", "DragonUILootFrame", "DragonUI_LootFrame", "GossipFrame", "QuestFrame", "QuestLogFrame", "MerchantFrame", "ClassTrainerFrame", "TradeFrame",
     "MailFrame", "OpenMailFrame", "BankFrame", "AuctionFrame", "GuildBankFrame", "CharacterFrame",
     "SpellBookFrame", "DragonUI_SpellbookFrame", "PlayerTalentFrame", "DragonUI_TalentFrame", "FriendsFrame",
     "PVPParentFrame", "LFDParentFrame", "AchievementFrame", "TradeSkillFrame", "PetStableFrame", "TabardFrame",
-    "ReadyCheckFrame",
+    "ReadyCheckFrame", "WorldMapFrame",
     "ContainerFrame1", "ContainerFrame2", "ContainerFrame3", "ContainerFrame4", "ContainerFrame5", "ContainerFrame6",
     "ContainerFrame7", "ContainerFrame8", "ContainerFrame9", "ContainerFrame10", "ContainerFrame11", "ContainerFrame12",
 }
@@ -22,6 +26,7 @@ local FECHAR = {
     KeyBindingFrame = "KeyBindingFrameCancelButton", StaticPopup1 = "StaticPopup1Button2",
     StaticPopup2 = "StaticPopup2Button2", StaticPopup3 = "StaticPopup3Button2", StaticPopup4 = "StaticPopup4Button2",
     LootFrame = "LootCloseButton", DragonUILootFrame = "LootCloseButton",
+    WorldMapFrame = "WorldMapFrameCloseButton",
 }
 local TECLAS_DIRECAO = {
     { "F6", "Cima" }, { "W", "Cima" }, { "F8", "Baixo" }, { "S", "Baixo" },
@@ -44,13 +49,67 @@ local function Clicavel(f)
     local tipo = f:GetObjectType()
     if tipo ~= "Button" and tipo ~= "CheckButton" then return false end
     if not f:IsVisible() or not f:IsEnabled() or not f:IsMouseEnabled() then return false end
-    return f:GetWidth() >= 12 and f:GetHeight() >= 12
+    if f.GetAlpha and f:GetAlpha() < 0.05 then return false end
+    local nome = f:GetName()
+    if nome == "WorldMapButton" then return false end
+    local w, h = f:GetWidth(), f:GetHeight()
+    if w < 12 or h < 12 then return false end
+    if w > 360 and h > 200 then return false end
+    return true
 end
 
-local function Juntar(f, saida, nivel)
-    if nivel > 7 or not f:IsVisible() then return end
-    if Clicavel(f) then saida[#saida + 1] = f end
-    for _, filho in ipairs({ f:GetChildren() }) do Juntar(filho, saida, nivel + 1) end
+local function Juntar(f, saida, nivel, vistos)
+    if nivel > 10 or not f:IsVisible() then return end
+    if not vistos[f] and Clicavel(f) then
+        vistos[f] = true
+        saida[#saida + 1] = f
+    end
+    for _, filho in ipairs({ f:GetChildren() }) do Juntar(filho, saida, nivel + 1, vistos) end
+end
+
+local function DentroDoScroll(f)
+    if not f or not f.GetTop or not f.GetBottom then return true end
+    local ft, fb = f:GetTop(), f:GetBottom()
+    if not ft or not fb then return true end
+    local p = f:GetParent()
+    for _ = 1, 8 do
+        if not p then break end
+        if p.IsObjectType and p:IsObjectType("ScrollFrame") then
+            local pt, pb = p:GetTop(), p:GetBottom()
+            if pt and pb then
+                return fb <= pt + 4 and ft >= pb - 4
+            end
+        end
+        p = p:GetParent()
+    end
+    return true
+end
+
+local function GarantirVisivelNoScroll(f)
+    if not f or not f.GetTop or not f.GetBottom then return end
+    local p = f:GetParent()
+    for _ = 1, 8 do
+        if not p then break end
+        if p.IsObjectType and p:IsObjectType("ScrollFrame") and p.GetVerticalScroll and p.SetVerticalScroll then
+            local pt, pb = p:GetTop(), p:GetBottom()
+            local ft, fb = f:GetTop(), f:GetBottom()
+            if pt and pb and ft and fb then
+                local delta = 0
+                if ft > pt - 2 then
+                    delta = -(ft - pt + 8)
+                elseif fb < pb + 2 then
+                    delta = pb - fb + 8
+                end
+                if delta ~= 0 then
+                    local atual = p:GetVerticalScroll() or 0
+                    local novo = math.max(0, atual + delta)
+                    p:SetVerticalScroll(novo)
+                end
+            end
+            return
+        end
+        p = p:GetParent()
+    end
 end
 
 local function JanelasAbertas()
@@ -71,8 +130,24 @@ end
 
 local function ColetarItens()
     local abertas, topo = JanelasAbertas()
-    local saida = {}
-    for _, f in ipairs(abertas) do Juntar(f, saida, 0) end
+    local saida, vistos = {}, {}
+    local function Add(b)
+        if b and not vistos[b] and Clicavel(b) then
+            vistos[b] = true
+            saida[#saida + 1] = b
+        end
+    end
+    for _, f in ipairs(abertas) do Juntar(f, saida, 0, vistos) end
+    local emModal = topo and (topo:find("^StaticPopup") or topo:find("^DropDownList") or topo:find("^DragonUIMenu"))
+    if not emModal and _G.WorldMapFrame and _G.WorldMapFrame:IsVisible() then
+        for _, nome in ipairs({
+            "WorldMapFrameCloseButton", "DragonUIWorldMapMaximizeButton",
+            "DragonUIWorldMapQuestLogToggle", "DragonUIWorldMapFilterButton",
+            "DragonUIWorldMapQuestSettings",
+        }) do
+            Add(_G[nome])
+        end
+    end
     -- A janela de Loot pode ser Blizzard padrao ou DragonUI (com botoes reparentados)
     local lootAberto = (_G.LootFrame and _G.LootFrame:IsVisible())
     if not lootAberto then
@@ -83,21 +158,12 @@ local function ColetarItens()
     end
     if lootAberto then
         topo = topo or "LootFrame"
-        for i = 1, 16 do
-            local b = _G["LootButton" .. i]
-            if b and Clicavel(b) then saida[#saida + 1] = b end
-        end
-        for i = 1, 32 do
-            local b = _G["DragonUILootRow" .. i]
-            if b and Clicavel(b) then saida[#saida + 1] = b end
-        end
+        for i = 1, 16 do Add(_G["LootButton" .. i]) end
+        for i = 1, 32 do Add(_G["DragonUILootRow" .. i]) end
     end
     -- A mochila da DragonUI nao tem janela de nome fixo: os itens sim.
-    if #abertas ~= 1 or not (topo or ""):find("^StaticPopup") and not (topo or ""):find("^DropDownList") then
-        for i = 1, MAX_ITENS_BOLSA do
-            local b = _G["DragonUI_BagsterItem" .. i]
-            if b and Clicavel(b) then saida[#saida + 1] = b end
-        end
+    if not emModal then
+        for i = 1, MAX_ITENS_BOLSA do Add(_G["DragonUI_BagsterItem" .. i]) end
         if #saida > #abertas and not topo then topo = "Bagster" end
     end
     return saida, topo
@@ -146,7 +212,10 @@ local function Focar(f)
     if not f then
         moldura:Hide()
     else
+        GarantirVisivelNoScroll(f)
         moldura:ClearAllPoints()
+        moldura:SetFrameStrata("TOOLTIP")
+        moldura:SetFrameLevel(math.max(100, (f:GetFrameLevel() or 0) + 20))
         moldura:SetPoint("TOPLEFT", f, "TOPLEFT", -3, 3)
         moldura:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 3, -3)
         moldura:Show()
@@ -184,17 +253,23 @@ local function PrimeiroItem()
     for _, b in ipairs(itens) do
         if ItemDeBolsa(b) then temItem = true end
     end
+    local melhorVis, notaVis = nil, -math.huge
     local melhor, nota = nil, -math.huge
     for _, b in ipairs(itens) do
         local x, y = Centro(b)
-        if x and (not temItem or ItemDeBolsa(b)) and y - x * 0.2 > nota then melhor, nota = b, y - x * 0.2 end
+        if x and (not temItem or ItemDeBolsa(b)) then
+            local val = y - x * 0.2
+            if DentroDoScroll(b) and val > notaVis then melhorVis, notaVis = b, val end
+            if val > nota then melhor, nota = b, val end
+        end
     end
-    return melhor
+    return melhorVis or melhor
 end
 
 local function Sair()
     if not ativo then return end
     ativo = false
+    assinatura = ""
     SairDoItem()
     foco = nil
     moldura:Hide()
@@ -341,54 +416,6 @@ local function AtualizarTaxi()
     SelecionarNoVoo(vooAtual)
 end
 
--- Mapa Mundial ----------------------------------------------------------------
-local mapaAtivo = false
-
-local function SairMapa()
-    if not mapaAtivo then return end
-    mapaAtivo = false
-    ClearOverrideBindings(dono)
-end
-
-local function ZoomInMapa()
-    if _G.WorldMapButton and _G.WorldMapButton:GetScript("OnMouseWheel") then
-        pcall(_G.WorldMapButton:GetScript("OnMouseWheel"), _G.WorldMapButton, 1)
-    end
-end
-
-local function ZoomOutMapa()
-    if _G.WorldMapButton and _G.WorldMapButton:GetScript("OnMouseWheel") then
-        pcall(_G.WorldMapButton:GetScript("OnMouseWheel"), _G.WorldMapButton, -1)
-    elseif _G.WorldMapZoomOutButton and _G.WorldMapZoomOutButton:IsEnabled() then
-        pcall(WorldMapZoomOutButton_OnClick)
-    end
-end
-
-local function FecharMapa()
-    ToggleWorldMap()
-    SairMapa()
-end
-
-local function EntrarMapa()
-    mapaAtivo = true
-    moldura:Hide()
-    SetOverrideBindingClick(dono, true, "F6", "SoderPadMapaZoomIn")
-    SetOverrideBindingClick(dono, true, "W", "SoderPadMapaZoomIn")
-    SetOverrideBindingClick(dono, true, "F8", "SoderPadMapaZoomOut")
-    SetOverrideBindingClick(dono, true, "S", "SoderPadMapaZoomOut")
-    SetOverrideBindingClick(dono, true, "F9", "SoderPadMapaEsq")
-    SetOverrideBindingClick(dono, true, "A", "SoderPadMapaEsq")
-    SetOverrideBindingClick(dono, true, "F7", "SoderPadMapaDir")
-    SetOverrideBindingClick(dono, true, "D", "SoderPadMapaDir")
-    SetOverrideBindingClick(dono, true, "SPACE", "SoderPadMapaZoomIn")
-    SetOverrideBindingClick(dono, true, "F1", "SoderPadMapaZoomIn")
-    SetOverrideBindingClick(dono, true, "F3", "SoderPadMapaFecha")
-    SetOverrideBindingClick(dono, true, "F10", "SoderPadMapaFecha")
-    for _, tecla in ipairs(TECLAS_MUDAS) do
-        SetOverrideBindingClick(dono, true, tecla, "SoderPadNavMudo")
-    end
-end
-
 local function Entrar()
     ativo = true
     for _, par in ipairs(TECLAS_DIRECAO) do
@@ -404,31 +431,19 @@ local function Atualizar()
     if not SoderPadLigado() then
         if ativo then Sair() end
         if taxiAtivo then SairTaxi() end
-        if mapaAtivo then SairMapa() end
         return
     end
 
     -- 1. Janela de Voos (Taxi) tem prioridade maxima se aberta
     if _G.TaxiFrame and _G.TaxiFrame:IsVisible() then
         if ativo then Sair() end
-        if mapaAtivo then SairMapa() end
         AtualizarTaxi()
         return
     elseif taxiAtivo then
         SairTaxi()
     end
 
-    -- 2. Mapa Mundial
-    if _G.WorldMapFrame and _G.WorldMapFrame:IsVisible() then
-        if ativo then Sair() end
-        if taxiAtivo then SairTaxi() end
-        if not mapaAtivo then EntrarMapa() end
-        return
-    elseif mapaAtivo then
-        SairMapa()
-    end
-
-    -- 3. Demais janelas (menus, mochilas, caixas de dialogo, loot)
+    -- 2. Janelas, Mapa Mundial, menus de dropdown e mochilas
     local lista, topo = ColetarItens()
     if not topo and #lista == 0 then
         Sair()
@@ -451,6 +466,11 @@ local function Atualizar()
         end
         local fechar = BotaoDeFechar(topo)
         SetOverrideBindingClick(dono, true, "F3", fechar or "SoderPadNavFecha")
+        if topo == "WorldMapFrame" then
+            SetOverrideBindingClick(dono, true, "F10", fechar or "SoderPadNavFecha")
+        else
+            SetOverrideBinding(dono, true, "F10", nil)
+        end
     end
 end
 
@@ -468,7 +488,6 @@ relogio:SetScript("OnEvent", function(_, evento)
         -- Ultimo momento em que ainda se pode trocar as teclas antes do combate.
         Sair()
         SairTaxi()
-        SairMapa()
         return
     end
     dono = CreateFrame("Frame", "SoderPadNavDono", UIParent)
@@ -498,11 +517,35 @@ relogio:SetScript("OnEvent", function(_, evento)
     Botao("SoderPadNavConfirma", function() if foco then foco:Click() end end)
     Botao("SoderPadNavFecha", function()
         local abertas = JanelasAbertas()
+        local fechouMenu = false
         for _, f in ipairs(abertas) do
-            if f:GetName():find("^ContainerFrame") then CloseAllBags() else HideUIPanel(f); f:Hide() end
+            local nome = f:GetName() or ""
+            if nome:find("^ContainerFrame") then
+                CloseAllBags()
+            elseif nome:find("^DragonUIMenu") then
+                f:Hide()
+                fechouMenu = true
+            elseif nome:find("^DropDownList") then
+                if CloseDropDownMenus then CloseDropDownMenus() end
+                f:Hide()
+                fechouMenu = true
+            elseif nome == "WorldMapFrame" then
+                if _G.WorldMapFrameCloseButton and _G.WorldMapFrameCloseButton:IsVisible() then
+                    _G.WorldMapFrameCloseButton:Click()
+                else
+                    if HideUIPanel then HideUIPanel(f) end
+                    if f:IsVisible() and ToggleWorldMap then ToggleWorldMap() end
+                    if f:IsVisible() then f:Hide() end
+                end
+            else
+                if HideUIPanel then HideUIPanel(f) end
+                f:Hide()
+            end
         end
-        if ToggleAllBags and _G["DragonUI_BagsterItem1"] and _G["DragonUI_BagsterItem1"]:IsVisible() then CloseAllBags() end
-        if _G.LootFrame and _G.LootFrame:IsVisible() then CloseLoot() end
+        if not fechouMenu then
+            if ToggleAllBags and _G["DragonUI_BagsterItem1"] and _G["DragonUI_BagsterItem1"]:IsVisible() then CloseAllBags() end
+            if _G.LootFrame and _G.LootFrame:IsVisible() then CloseLoot() end
+        end
     end)
 
     -- Botoes de Taxi / Ponto de Voo
@@ -520,13 +563,6 @@ relogio:SetScript("OnEvent", function(_, evento)
         if _G.TaxiFrame then _G.TaxiFrame:Hide() end
         SairTaxi()
     end)
-
-    -- Botoes de Mapa Mundial
-    Botao("SoderPadMapaZoomIn", ZoomInMapa)
-    Botao("SoderPadMapaZoomOut", ZoomOutMapa)
-    Botao("SoderPadMapaFecha", FecharMapa)
-    Botao("SoderPadMapaEsq", ZoomOutMapa)
-    Botao("SoderPadMapaDir", ZoomInMapa)
 
     local passou = 0
     relogio:SetScript("OnUpdate", function(_, d)
