@@ -18,7 +18,7 @@ function deepMerge(base, over) {
 }
 
 /** Only these keys can be changed from the UI (the rest is factory/manifest data). */
-const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'selectedClient', 'installDir', 'wine.path', 'wine.prefix', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
+const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'selectedClient', 'supporterContentEnabled', 'installDir', 'wine.path', 'wine.prefix', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
 
 class ConfigurationManager {
   /**
@@ -85,7 +85,7 @@ class ConfigurationManager {
     if ((key === 'installDir' || key.startsWith('wine.') || /^clients\.[a-z0-9]+\.path$/.test(key)) && (typeof value !== 'string' || !path.isAbsolute(value))) {
       throw new LauncherError('CONFIG_INVALID', `${key} must be an absolute path`)
     }
-    if (key === 'api.discovery.enabled' && typeof value !== 'boolean') throw new LauncherError('CONFIG_INVALID', `${key} must be true/false`)
+    if ((key === 'api.discovery.enabled' || key === 'supporterContentEnabled') && typeof value !== 'boolean') throw new LauncherError('CONFIG_INVALID', `${key} must be true/false`)
   }
 }
 

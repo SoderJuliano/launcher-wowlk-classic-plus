@@ -119,6 +119,25 @@ class ManifestService {
     }
   }
 
+  /**
+   * Fetches the supporter-exclusive dev manifest for a specific client (wow32 / wow64).
+   * Requires a valid supporter Bearer token; returns null if not published yet or not eligible.
+   */
+  async fetchSupporterManifest(clientId) {
+    if (!this.auth.isAuthenticated() && !this.auth.session) return null
+    try {
+      const token = await this.auth.accessToken()
+      const raw = await this.api.request('GET', `/manifest/${encodeURIComponent(clientId)}/supporter`, { token })
+      if (!raw) return null
+      return validateManifest(raw, clientId)
+    } catch (err) {
+      if (err.status === 404 || err.status === 403 || err.code === 'HTTP_404' || err.code === 'NOT_FOUND' || err.code === 'ACCOUNT_LOCKED') {
+        return null
+      }
+      throw err
+    }
+  }
+
   async #fetchStatic(url) {
     assertSafeUrl(url)
     const ctrl = new AbortController()

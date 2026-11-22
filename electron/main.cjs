@@ -24,6 +24,7 @@ const { ManifestService } = require('./core/ManifestService.cjs')
 const { DownloadManager } = require('./core/DownloadManager.cjs')
 const { InstallationManager } = require('./core/InstallationManager.cjs')
 const { UpdateManager } = require('./core/UpdateManager.cjs')
+const { SupporterContentManager } = require('./core/SupporterContentManager.cjs')
 const { GameLauncher } = require('./core/GameLauncher.cjs')
 const { LauncherSelfUpdater } = require('./core/LauncherSelfUpdater.cjs')
 const { LauncherController } = require('./core/LauncherController.cjs')
@@ -52,11 +53,12 @@ function createServices() {
   const downloader = new DownloadManager()
   const installer = new InstallationManager({ config })
   const updater = new UpdateManager({ config, installer, downloader })
+  const supporterContent = new SupporterContentManager({ config, downloader })
   const game = new GameLauncher({ config, installer })
   gameLauncher = game
   const selfUpdater = new LauncherSelfUpdater({ config, api, manifests, downloader, launcherVersion: VERSION })
   controller = new LauncherController({
-    config, api, auth, manifests, downloader, installer, updater, game, selfUpdater,
+    config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater,
     emit: (channel, payload) => {
       win?.webContents.send(`olk:${channel}`, payload)
       if (channel === 'game-exit') {
@@ -169,6 +171,7 @@ function registerIpc() {
   handle('logout', () => controller.logout())
   handle('checkApi', () => controller.checkApi())
   handle('selectClient', (id) => controller.updateSettings({ selectedClient: String(id) }))
+  handle('setSupporterContent', (enabled) => controller.setSupporterContentEnabled(!!enabled))
   handle('install', (id) => controller.install(String(id)))
   handle('update', (id) => controller.update(String(id)))
   handle('repair', (id) => controller.update(String(id), { repair: true }))

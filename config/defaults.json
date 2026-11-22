@@ -13,6 +13,7 @@
   "realmlist": "ru2esxz6.free.tryportwarp.cc:16943",
   "locale": "enUS",
   "selectedClient": "wow32",
+  "supporterContentEnabled": false,
   "clients": {
     "wow32": {
       "name": "Classic Plus LK — 32-bit",

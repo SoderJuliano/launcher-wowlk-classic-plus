@@ -14,13 +14,14 @@ const platform = require('./PlatformService.cjs')
 const log = require('./logger.cjs')
 
 class LauncherController {
-  constructor({ config, api, auth, manifests, downloader, installer, updater, game, selfUpdater, emit }) {
-    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, game, selfUpdater })
+  constructor({ config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater, emit }) {
+    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater })
     this.emit = emit || (() => {})
     this.task = null // { id, kind, phase, done, total, file, bytesPerSec, controller }
     this.launcherUpdate = null
     this.lastError = {} // clientId -> { code, message }
     this.manifestCache = {} // clientId -> { manifest, fetchedAt } | { error }
+    this.supporterManifestCache = {} // clientId -> { manifest, fetchedAt }
     this.supporter = null // { supporter: boolean, since: string | null, donations: number } | null
     this.supporterCheckedAt = 0
     this.wine = null
@@ -61,7 +62,12 @@ class LauncherController {
       }
     }
     await this.auth.restore()
-    if (this.auth.isAuthenticated()) await this.refreshSupporter()
+    if (this.auth.isAuthenticated()) {
+      await this.refreshSupporter()
+      if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+        await this.refreshSupporterManifests()
+      }
+    }
     await this.refreshManifests()
     this.startPeriodicCheck()
     this.#publish()
@@ -84,12 +90,17 @@ class LauncherController {
     const v = this.installer.verify(id)
     const m = this.manifestCache[id]?.manifest
     const updateAvailable = !!(v.installed && m && v.state?.version !== m.version)
+    const supporterEnabled = !!(this.config.get().supporterContentEnabled && this.supporter?.supporter)
+    const sm = this.supporterManifestCache[id]?.manifest
+    const sState = this.supporterContent?.readState(id) || null
+    const supporterActive = this.supporterContent?.isActive(id) || false
+    const supporterUpdateAvailable = !!(v.installed && supporterEnabled && sm && sState?.version !== sm.version)
     let button = 'INSTALL'
     if (!c.available) button = 'UNAVAILABLE'
     else if (this.task?.id === id) button = { download: 'DOWNLOADING', extract: 'INSTALLING', verify: 'VERIFYING', update: 'UPDATING' }[this.task.stage] || 'INSTALLING'
     else if (this.game.isRunning(id)) button = 'RUNNING'
     else if (this.lastError[id]) button = 'ERROR'
-    else if (v.installed) button = updateAvailable ? 'UPDATE' : 'PLAY'
+    else if (v.installed) button = (updateAvailable || supporterUpdateAvailable) ? 'UPDATE' : 'PLAY'
     else if (v.state) button = 'REPAIR'
     return {
       id,
@@ -101,6 +112,11 @@ class LauncherController {
       version: v.state?.version ?? null,
       latestVersion: m?.version ?? null,
       updateAvailable,
+      supporterVersion: sState?.version ?? null,
+      supporterLatestVersion: sm?.version ?? null,
+      supporterUpdateAvailable,
+      supporterActive,
+      hasSupporterContent: !!sm,
       installDir: this.config.clientDir(id),
       hasPackageSource: !!(m?.base_package?.url || c.basePackage?.url),
       located: !!c.path,
@@ -118,6 +134,7 @@ class LauncherController {
       api: this.api.lastStatus,
       user: this.auth.user,
       supporter: this.supporter,
+      supporterContentEnabled: !!cfg.supporterContentEnabled,
       authenticated: this.auth.isAuthenticated(),
       hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
@@ -151,6 +168,9 @@ class LauncherController {
       if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username, creds?.password)
     }
     await Promise.all([this.refreshSupporter(), this.refreshManifests()])
+    if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+      await this.refreshSupporterManifests()
+    }
     this.#publish()
     return user
   }
@@ -170,6 +190,10 @@ class LauncherController {
     await this.auth.logout()
     this.supporter = null
     this.manifestCache = {}
+    this.supporterManifestCache = {}
+    for (const id of Object.keys(this.config.get().clients)) {
+      try { this.supporterContent?.deactivate(id) } catch (err) { log.warn(`logout deactivate ${id} failed`, err.message) }
+    }
     this.#publish()
   }
 
@@ -222,6 +246,84 @@ class LauncherController {
     await this.api.health()
     this.#publish()
     return this.api.lastStatus
+  }
+
+  /** Fetches supporter-exclusive dev manifests (/manifest/{client}/supporter) for available clients. */
+  async refreshSupporterManifests() {
+    if (!this.supporter?.supporter || (!this.auth.isAuthenticated() && !this.auth.session)) {
+      this.supporterManifestCache = {}
+      return
+    }
+    if (this.api.lastStatus?.state !== 'online') return
+    for (const id of Object.keys(this.config.get().clients)) {
+      const c = this.config.client(id)
+      if (!c.available) continue
+      try {
+        const m = await this.manifests.fetchSupporterManifest(id)
+        if (m) this.supporterManifestCache[id] = { manifest: m, fetchedAt: Date.now() }
+        else delete this.supporterManifestCache[id]
+      } catch (err) {
+        log.warn(`supporter manifest ${id} unavailable`, toPlain(err))
+      }
+    }
+  }
+
+  /**
+   * Toggles early-access supporter dev content ON or OFF.
+   * When enabling: ALWAYS re-verifies supporter status directly in MariaDB (wowlk_site.donation)
+   * via GET /donation/v1/me, then fetches and syncs the supporter manifest for the selected client.
+   * When disabling: immediately reverts any active supporter overlay so the client is 100% standard.
+   */
+  async setSupporterContentEnabled(enabled) {
+    if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
+    const clientIds = Object.keys(this.config.get().clients)
+    if (clientIds.some((id) => this.game.isRunning(id))) {
+      throw new LauncherError('ALREADY_RUNNING', 'Close the game before changing early-access content.')
+    }
+
+    if (enabled) {
+      await this.refreshSupporter()
+      if (!this.supporter?.supporter) {
+        this.config.update({ supporterContentEnabled: false })
+        this.#publish()
+        throw new LauncherError('NOT_SUPPORTER', 'Your account is not confirmed as a Supporter.')
+      }
+      this.config.update({ supporterContentEnabled: true })
+      await this.refreshSupporterManifests()
+      this.#publish()
+
+      const sel = this.config.get().selectedClient
+      const st = this.clientState(sel)
+      if (st.installed && st.supporterUpdateAvailable) {
+        await this.syncSupporterContent(sel)
+      }
+    } else {
+      this.config.update({ supporterContentEnabled: false })
+      for (const id of clientIds) {
+        try { this.supporterContent?.deactivate(id) } catch (err) { log.warn(`deactivate supporter ${id} failed`, err.message) }
+      }
+      this.#publish()
+    }
+    return this.snapshot()
+  }
+
+  /** Downloads/updates the supporter overlay cache for a client inside .olk-supporter/files/. */
+  syncSupporterContent(id) {
+    return this.#run(id, 'update', async (signal) => {
+      if (!this.supporterContent) return this.clientState(id)
+      const m = this.supporterManifestCache[id]?.manifest ?? (await this.manifests.fetchSupporterManifest(id))
+      if (!m) return this.clientState(id)
+      this.supporterManifestCache[id] = { manifest: m, fetchedAt: Date.now() }
+      if (this.task) this.task.stage = 'verify'
+      await this.supporterContent.sync(id, m, {
+        signal,
+        onProgress: (p) => {
+          if (this.task) this.task.stage = p.phase === 'downloading' ? 'update' : 'verify'
+          this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
+        }
+      })
+      return this.clientState(id)
+    })
   }
 
   /** Fetches manifests for every available client. Absence of the endpoint is not fatal. */
@@ -307,10 +409,19 @@ class LauncherController {
   /** Incremental update (or repair: same thing, it re-checks every listed file). */
   update(id, { repair = false } = {}) {
     return this.#run(id, repair ? 'repair' : 'update', async (signal) => {
+      // Always deactivate supporter overlay before touching base client files so UpdateManager sees a clean base.
+      this.supporterContent?.deactivate(id)
       const m = this.manifestCache[id]?.manifest ?? (await this.manifests.fetch(id))
       this.manifestCache[id] = { manifest: m, fetchedAt: Date.now() }
       await this.#update(id, m, signal, { ignoreCache: repair })
       this.installer.ensureRealmlist(id)
+      if (this.config.get().supporterContentEnabled && this.supporter?.supporter && this.supporterContent) {
+        const sm = this.supporterManifestCache[id]?.manifest ?? (await this.manifests.fetchSupporterManifest(id))
+        if (sm) {
+          this.supporterManifestCache[id] = { manifest: sm, fetchedAt: Date.now() }
+          await this.supporterContent.sync(id, sm, { signal, onProgress: this.#progress('update') })
+        }
+      }
       return this.clientState(id)
     })
   }
@@ -331,11 +442,19 @@ class LauncherController {
       log.info(`update required before play for ${id}`)
       return this.update(id)
     }
+    const supporterOn = !!(this.config.get().supporterContentEnabled && this.supporter?.supporter)
+    if (supporterOn && state.supporterUpdateAvailable) {
+      log.info(`supporter content update required before play for ${id}`)
+      await this.syncSupporterContent(id)
+    }
     if (platform.platform !== 'win32' && (!this.wine || !this.wine.found)) {
       log.info(`Wine missing on ${platform.platform}; auto-installing wine runtime fallback before launching...`)
       await this.installWine()
     }
     try {
+      // Apply or revert supporter overlay cleanly right before launching the game.
+      if (supporterOn) this.supporterContent?.activate(id)
+      else this.supporterContent?.deactivate(id)
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
       const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials })
       this.#publish()
@@ -475,6 +594,9 @@ class LauncherController {
       if (this.auth.isAuthenticated() || this.auth.session) {
         try {
           await this.refreshSupporter()
+          if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+            await this.refreshSupporterManifests()
+          }
         } catch (err) {
           log.warn('periodic supporter refresh failed', toPlain(err))
         }
