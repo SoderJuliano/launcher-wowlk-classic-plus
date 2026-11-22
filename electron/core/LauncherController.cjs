@@ -64,7 +64,7 @@ class LauncherController {
     await this.auth.restore()
     if (this.auth.isAuthenticated()) {
       await this.refreshSupporter()
-      if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+      if (this.supporter?.supporter) {
         await this.refreshSupporterManifests()
       }
     }
@@ -90,7 +90,7 @@ class LauncherController {
     const v = this.installer.verify(id)
     const m = this.manifestCache[id]?.manifest
     const updateAvailable = !!(v.installed && m && v.state?.version !== m.version)
-    const supporterEnabled = !!(this.config.get().supporterContentEnabled && this.supporter?.supporter)
+    const supporterEnabled = !!(c.supporterContentEnabled && this.supporter?.supporter)
     const sm = this.supporterManifestCache[id]?.manifest
     const sState = this.supporterContent?.readState(id) || null
     const supporterActive = this.supporterContent?.isActive(id) || false
@@ -112,6 +112,7 @@ class LauncherController {
       version: v.state?.version ?? null,
       latestVersion: m?.version ?? null,
       updateAvailable,
+      supporterContentEnabled: !!c.supporterContentEnabled,
       supporterVersion: sState?.version ?? null,
       supporterLatestVersion: sm?.version ?? null,
       supporterUpdateAvailable,
@@ -134,7 +135,6 @@ class LauncherController {
       api: this.api.lastStatus,
       user: this.auth.user,
       supporter: this.supporter,
-      supporterContentEnabled: !!cfg.supporterContentEnabled,
       authenticated: this.auth.isAuthenticated(),
       hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
@@ -168,7 +168,7 @@ class LauncherController {
       if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username, creds?.password)
     }
     await Promise.all([this.refreshSupporter(), this.refreshManifests()])
-    if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+    if (this.supporter?.supporter) {
       await this.refreshSupporterManifests()
     }
     this.#publish()
@@ -248,16 +248,17 @@ class LauncherController {
     return this.api.lastStatus
   }
 
-  /** Fetches supporter-exclusive dev manifests (/manifest/{client}/supporter) for available clients. */
-  async refreshSupporterManifests() {
+  /** Fetches supporter-exclusive dev manifests (/manifest/{client}/supporter) for enabled available clients. */
+  async refreshSupporterManifests(onlyClientId = null) {
     if (!this.supporter?.supporter || (!this.auth.isAuthenticated() && !this.auth.session)) {
       this.supporterManifestCache = {}
       return
     }
     if (this.api.lastStatus?.state !== 'online') return
-    for (const id of Object.keys(this.config.get().clients)) {
+    const ids = onlyClientId ? [onlyClientId] : Object.keys(this.config.get().clients)
+    for (const id of ids) {
       const c = this.config.client(id)
-      if (!c.available) continue
+      if (!c.available || !c.supporterContentEnabled) continue
       try {
         const m = await this.manifests.fetchSupporterManifest(id)
         if (m) this.supporterManifestCache[id] = { manifest: m, fetchedAt: Date.now() }
@@ -269,39 +270,37 @@ class LauncherController {
   }
 
   /**
-   * Toggles early-access supporter dev content ON or OFF.
+   * Toggles early-access supporter dev content ON or OFF for a specific client (wow32 or wow64).
    * When enabling: ALWAYS re-verifies supporter status directly in MariaDB (wowlk_site.donation)
-   * via GET /donation/v1/me, then fetches and syncs the supporter manifest for the selected client.
-   * When disabling: immediately reverts any active supporter overlay so the client is 100% standard.
+   * via GET /donation/v1/me, then fetches and syncs the supporter manifest for that client.
+   * When disabling: immediately reverts any active supporter overlay for that client.
    */
-  async setSupporterContentEnabled(enabled) {
+  async setSupporterContentEnabled(clientId, enabled) {
     if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
-    const clientIds = Object.keys(this.config.get().clients)
-    if (clientIds.some((id) => this.game.isRunning(id))) {
-      throw new LauncherError('ALREADY_RUNNING', 'Close the game before changing early-access content.')
+    const c = this.config.client(clientId)
+    if (this.game.isRunning(clientId)) {
+      throw new LauncherError('ALREADY_RUNNING', 'Close the game before changing new content settings.')
     }
+    const key = `clients.${clientId}.supporterContentEnabled`
 
     if (enabled) {
       await this.refreshSupporter()
       if (!this.supporter?.supporter) {
-        this.config.update({ supporterContentEnabled: false })
+        this.config.update({ [key]: false })
         this.#publish()
         throw new LauncherError('NOT_SUPPORTER', 'Your account is not confirmed as a Supporter.')
       }
-      this.config.update({ supporterContentEnabled: true })
-      await this.refreshSupporterManifests()
+      this.config.update({ [key]: true })
+      if (c.available) await this.refreshSupporterManifests(clientId)
       this.#publish()
 
-      const sel = this.config.get().selectedClient
-      const st = this.clientState(sel)
+      const st = this.clientState(clientId)
       if (st.installed && st.supporterUpdateAvailable) {
-        await this.syncSupporterContent(sel)
+        await this.syncSupporterContent(clientId)
       }
     } else {
-      this.config.update({ supporterContentEnabled: false })
-      for (const id of clientIds) {
-        try { this.supporterContent?.deactivate(id) } catch (err) { log.warn(`deactivate supporter ${id} failed`, err.message) }
-      }
+      this.config.update({ [key]: false })
+      try { this.supporterContent?.deactivate(clientId) } catch (err) { log.warn(`deactivate supporter ${clientId} failed`, err.message) }
       this.#publish()
     }
     return this.snapshot()
@@ -415,7 +414,7 @@ class LauncherController {
       this.manifestCache[id] = { manifest: m, fetchedAt: Date.now() }
       await this.#update(id, m, signal, { ignoreCache: repair })
       this.installer.ensureRealmlist(id)
-      if (this.config.get().supporterContentEnabled && this.supporter?.supporter && this.supporterContent) {
+      if (this.config.client(id).supporterContentEnabled && this.supporter?.supporter && this.supporterContent) {
         const sm = this.supporterManifestCache[id]?.manifest ?? (await this.manifests.fetchSupporterManifest(id))
         if (sm) {
           this.supporterManifestCache[id] = { manifest: sm, fetchedAt: Date.now() }
@@ -442,7 +441,7 @@ class LauncherController {
       log.info(`update required before play for ${id}`)
       return this.update(id)
     }
-    const supporterOn = !!(this.config.get().supporterContentEnabled && this.supporter?.supporter)
+    const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter)
     if (supporterOn && state.supporterUpdateAvailable) {
       log.info(`supporter content update required before play for ${id}`)
       await this.syncSupporterContent(id)
@@ -594,7 +593,7 @@ class LauncherController {
       if (this.auth.isAuthenticated() || this.auth.session) {
         try {
           await this.refreshSupporter()
-          if (this.config.get().supporterContentEnabled && this.supporter?.supporter) {
+          if (this.supporter?.supporter) {
             await this.refreshSupporterManifests()
           }
         } catch (err) {

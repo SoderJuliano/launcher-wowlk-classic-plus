@@ -97,23 +97,14 @@ async function installWine() {
 }
 const logout = () => run('logout').then(() => (store.skippedLogin = false))
 const togglingSupporter = ref(false)
-const supporterContentOn = computed(() => !!(snap.value?.supporterContentEnabled && snap.value?.supporter?.supporter))
-const supporterSubline = computed(() => {
-  if (togglingSupporter.value) return 'Verificando apoiador…'
-  if (!supporterContentOn.value) return 'Desativado · inicia versão padrão'
-  const c = client.value
-  if (c.supporterUpdateAvailable) return `Atualização dev disponível (v${c.supporterLatestVersion})`
-  if (c.supporterVersion) return `Ativo · v${c.supporterVersion}`
-  if (c.hasSupporterContent) return `Disponível · v${c.supporterLatestVersion}`
-  return 'Ativo · aguardando novos pacotes'
-})
+const supporterContentOn = computed(() => !!(client.value?.supporterContentEnabled && snap.value?.supporter?.supporter))
 async function toggleSupporterContent() {
-  if (togglingSupporter.value || busy.value) return
+  if (togglingSupporter.value || busy.value || !client.value?.available) return
   togglingSupporter.value = true
   try {
     const next = !supporterContentOn.value
-    await call('setSupporterContent', next)
-    toast(next ? 'Novos conteúdos de apoiador ativados.' : 'Novos conteúdos desativados. O jogo iniciará na versão padrão.', 'info')
+    await call('setSupporterContent', client.value.id, next)
+    toast(next ? 'New content enabled.' : 'New content disabled.', 'info')
   } catch (e) {
     if (e.code !== 'CANCELLED') toast(e.message)
   } finally {
@@ -144,26 +135,6 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
         </span>
         <span class="cc__dot" :class="c.installed ? 'ok' : c.available ? 'idle' : 'off'" />
       </button>
-
-      <!-- Toggle exclusivo para apoiadores (verificado em wowlk_site.donation) -->
-      <div v-if="snap.supporter?.supporter" class="sup-toggle" :class="{ 'is-on': supporterContentOn }">
-        <button
-          type="button"
-          class="sup-toggle__btn"
-          role="switch"
-          :aria-checked="supporterContentOn"
-          :disabled="busy || togglingSupporter || client.running"
-          @click="toggleSupporterContent"
-        >
-          <span class="sup-toggle__info">
-            <span class="sup-toggle__title"><Icon name="crown" :size="13" /> Ativar novos conteúdos</span>
-            <small class="sup-toggle__sub">{{ supporterSubline }}</small>
-          </span>
-          <span class="sup-toggle__track" :class="{ 'is-on': supporterContentOn }">
-            <span class="sup-toggle__thumb" />
-          </span>
-        </button>
-      </div>
 
       <div class="side__links">
         <button v-if="client.available" type="button" class="lnk" :disabled="busy" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate installed game</button>
@@ -200,6 +171,21 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
           <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
           <div v-if="snap.wine?.needed"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
         </dl>
+        <button
+          v-if="snap.supporter?.supporter"
+          type="button"
+          class="sup-toggle"
+          :class="{ 'is-on': supporterContentOn }"
+          role="switch"
+          :aria-checked="supporterContentOn"
+          :disabled="!client.available || busy || togglingSupporter || client.running"
+          @click="toggleSupporterContent"
+        >
+          <span class="sup-toggle__label">Enable new content</span>
+          <span class="sup-toggle__track" :class="{ 'is-on': supporterContentOn }">
+            <span class="sup-toggle__thumb" />
+          </span>
+        </button>
         <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
           <div class="wine-alert__content">
@@ -272,13 +258,16 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .cc__dot.idle { background: var(--gold-300); }
 .cc__dot.off { background: var(--text-400); }
 .side__links { margin-top: auto; display: grid; gap: 2px; }
-.sup-toggle { margin-top: 6px; border-radius: 6px; border: 1px solid rgba(233, 196, 106, .24); background: rgba(233, 196, 106, .05); transition: border-color .2s, background .2s; }
-.sup-toggle.is-on { border-color: var(--gold-300); background: linear-gradient(135deg, rgba(233, 196, 106, .14), rgba(8, 14, 22, .7)); }
-.sup-toggle__btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 11px; border: 0; background: transparent; cursor: pointer; text-align: left; }
-.sup-toggle__btn:disabled { opacity: .6; cursor: default; }
-.sup-toggle__info { display: grid; gap: 3px; min-width: 0; }
-.sup-toggle__title { display: inline-flex; align-items: center; gap: 6px; font: 600 .78rem/1.1 var(--font-display); color: var(--gold-100); letter-spacing: .04em; }
-.sup-toggle__sub { font-size: .68rem; color: var(--text-300); line-height: 1.2; }
+.sup-toggle {
+  margin-top: 14px; display: inline-flex; align-items: center; gap: 12px; padding: 8px 12px;
+  border-radius: 4px; border: 1px solid var(--line); background: rgba(3, 6, 10, .6);
+  cursor: pointer; transition: border-color .2s, background .2s;
+}
+.sup-toggle:hover:not(:disabled) { border-color: var(--line-strong); }
+.sup-toggle.is-on { border-color: var(--gold-400); background: rgba(233, 196, 106, .1); }
+.sup-toggle:disabled { opacity: .5; cursor: default; }
+.sup-toggle__label { font: 600 .8rem/1 var(--font-body); color: var(--text-100); letter-spacing: .04em; }
+.sup-toggle.is-on .sup-toggle__label { color: var(--gold-100); }
 .sup-toggle__track { flex: none; width: 34px; height: 18px; border-radius: 999px; background: rgba(255, 255, 255, .14); border: 1px solid var(--line-strong); position: relative; transition: background .2s, border-color .2s; }
 .sup-toggle__track.is-on { background: linear-gradient(135deg, var(--gold-300), var(--gold-500)); border-color: var(--gold-200); }
 .sup-toggle__thumb { position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); transition: transform .2s var(--ease); }

@@ -9,6 +9,7 @@ export function installMockBridge() {
   const client = (id, over) => ({
     id, name: id === 'wow32' ? 'Classic Plus LK — 32-bit' : 'Classic Plus LK — 64-bit', architecture: id === 'wow32' ? 'x86' : 'x64',
     available: id === 'wow32', installed: false, missing: [], version: null, latestVersion: null, updateAvailable: false,
+    supporterContentEnabled: false,
     installDir: `C:\\Users\\player\\AppData\\Roaming\\OLK Plus Launcher\\games\\${id}`, hasPackageSource: true, running: false,
     button: id === 'wow32' ? 'INSTALL' : 'UNAVAILABLE', error: null, ...over
   })

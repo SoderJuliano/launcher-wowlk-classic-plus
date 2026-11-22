@@ -13,7 +13,6 @@
   "realmlist": "ru2esxz6.free.tryportwarp.cc:16943",
   "locale": "enUS",
   "selectedClient": "wow32",
-  "supporterContentEnabled": false,
   "clients": {
     "wow32": {
       "name": "Classic Plus LK — 32-bit",
@@ -34,6 +33,7 @@
         "Data/patch.MPQ",
         "Data/{locale}/locale-{locale}.MPQ"
       ],
+      "supporterContentEnabled": false,
       "available": true
     },
     "wow64": {
@@ -47,6 +47,7 @@
         "sha256": ""
       },
       "requiredFiles": [],
+      "supporterContentEnabled": false,
       "available": false
     }
   },

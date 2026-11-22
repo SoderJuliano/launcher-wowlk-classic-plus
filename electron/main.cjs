@@ -171,7 +171,7 @@ function registerIpc() {
   handle('logout', () => controller.logout())
   handle('checkApi', () => controller.checkApi())
   handle('selectClient', (id) => controller.updateSettings({ selectedClient: String(id) }))
-  handle('setSupporterContent', (enabled) => controller.setSupporterContentEnabled(!!enabled))
+  handle('setSupporterContent', (id, enabled) => controller.setSupporterContentEnabled(String(id), !!enabled))
   handle('install', (id) => controller.install(String(id)))
   handle('update', (id) => controller.update(String(id)))
   handle('repair', (id) => controller.update(String(id), { repair: true }))
