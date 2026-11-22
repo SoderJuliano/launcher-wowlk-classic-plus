@@ -164,3 +164,16 @@ test('supporter status is fetched from /donation/v1/me with bearer token', async
     assert.equal(me.since, '2026-11-22T16:59:41Z')
   } finally { await s.close() }
 })
+
+test('concurrent refresh calls coalesce into a single request (no double-rotation race)', async () => {
+  const s = await setup({ expiresIn: 120 })
+  try {
+    await s.auth.login({ username: 'ARTHAS', password: 'Frostmourne1', remember: true })
+    s.advance(90_000)
+    const [t1, t2, t3] = await Promise.all([s.auth.accessToken(), s.auth.accessToken(), s.auth.accessToken()])
+    assert.equal(t1, 'acc-r1')
+    assert.equal(t2, 'acc-r1')
+    assert.equal(t3, 'acc-r1')
+    assert.equal(s.state.refreshes, 1, 'must only call /auth/refresh once for concurrent callers')
+  } finally { await s.close() }
+})

@@ -60,9 +60,11 @@ function createServices() {
   controller = new LauncherController({
     config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater,
     emit: (channel, payload) => {
-      win?.webContents.send(`olk:${channel}`, payload)
+      if (win && !win.isDestroyed()) {
+        try { win.webContents.send(`olk:${channel}`, payload) } catch {}
+      }
       if (channel === 'game-exit') {
-        try { win?.show(); if (win?.isMinimized()) win.restore(); win?.focus() } catch {}
+        try { if (win && !win.isDestroyed()) { win.show(); if (win.isMinimized()) win.restore(); win.focus() } } catch {}
       }
     }
   })
@@ -142,7 +144,7 @@ function createWindow() {
   setTimeout(showWindow, 1000)
 
   win.on('focus', () => {
-    controller?.refreshSupporterIfStale?.().catch(() => {})
+    if (controller?.initialized) controller.refreshSupporterIfStale().catch(() => {})
   })
 
   // No navigation away from the app, no popups: external links go to the system browser.

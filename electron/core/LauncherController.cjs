@@ -24,6 +24,7 @@ class LauncherController {
     this.supporterManifestCache = {} // clientId -> { manifest, fetchedAt }
     this.supporter = null // { supporter: boolean, since: string | null, donations: number } | null
     this.supporterCheckedAt = 0
+    this.initialized = false
     this.wine = null
     this.periodicTimer = null
   }
@@ -69,6 +70,7 @@ class LauncherController {
       }
     }
     await this.refreshManifests()
+    this.initialized = true
     this.startPeriodicCheck()
     this.#publish()
   }

@@ -65,6 +65,7 @@ class AuthenticationService {
     this.launcherVersion = launcherVersion
     this.now = now || Date.now
     this.session = null // { accessToken, expiresAt, refreshToken, refreshExpiresAt, user }
+    this._refreshPromise = null
   }
 
   get user() { return this.session?.user ?? null }
@@ -121,6 +122,14 @@ class AuthenticationService {
   }
 
   async refresh() {
+    if (this._refreshPromise) return this._refreshPromise
+    this._refreshPromise = this.#doRefresh().finally(() => {
+      this._refreshPromise = null
+    })
+    return this._refreshPromise
+  }
+
+  async #doRefresh() {
     const rt = this.session?.refreshToken
     if (!rt || (this.session.refreshExpiresAt && this.session.refreshExpiresAt < this.now())) {
       this.session = null
@@ -180,6 +189,15 @@ class AuthenticationService {
         await this.refresh()
       } catch (e) {
         if (e.code === 'SESSION_EXPIRED' || e.code === 'INVALID_REFRESH_TOKEN') {
+          if (saved.user?.username && savedPwd) {
+            try {
+              log.info(`saved refresh token expired for ${saved.user.username}, re-authenticating from encrypted cache`)
+              await this.login({ username: saved.user.username, password: savedPwd, remember: true })
+              return this.session?.user || null
+            } catch (loginErr) {
+              log.warn('silent re-login from cache failed', { code: loginErr.code, message: loginErr.message })
+            }
+          }
           this.session = null
           this.#forgetDisk()
           return null
