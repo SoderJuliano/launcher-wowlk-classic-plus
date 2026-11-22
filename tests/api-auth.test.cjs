@@ -41,6 +41,10 @@ function pikachuRoutes(state) {
     [`${P}/manifest/wow32`]: (req, res) => {
       if (!/^Bearer acc-/.test(req.headers.authorization || '')) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Login required' } })
       json(res, 200, { schema_version: 1, client: 'wow32', architecture: 'x86', version: '1.0.0', min_launcher_version: state.minLauncher, files: [], deleted_files: [] })
+    },
+    '/donation/v1/me': (req, res) => {
+      if (!/^Bearer acc-/.test(req.headers.authorization || '')) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Login required' } })
+      json(res, 200, { supporter: true, since: '2026-11-22T16:59:41Z', donations: 1 })
     }
   }
 }
@@ -147,4 +151,16 @@ test('unreachable API is reported clearly (offline / timeout)', async () => {
   const st = await new ApiClient({ config, launcherVersion: '0.1.0' }).health()
   assert.equal(st.state, 'offline')
   assert.match(st.error, /reach/i)
+})
+
+test('supporter status is fetched from /donation/v1/me with bearer token', async () => {
+  const s = await setup()
+  try {
+    await s.auth.login({ username: 'ARTHAS', password: 'Frostmourne1' })
+    const token = await s.auth.accessToken()
+    const me = await s.api.request('GET', '/me', { token, prefix: '/donation/v1' })
+    assert.equal(me.supporter, true)
+    assert.equal(me.donations, 1)
+    assert.equal(me.since, '2026-11-22T16:59:41Z')
+  } finally { await s.close() }
 })

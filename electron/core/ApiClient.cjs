@@ -107,9 +107,10 @@ class ApiClient {
    * JSON request against {base}{prefix}{path}. Maps the error envelope
    * { "error": { "code": "...", "message": "..." } } to LauncherError.
    */
-  async request(method, path, { body, token, retryDiscovery = true } = {}) {
+  async request(method, path, { body, token, prefix, retryDiscovery = true } = {}) {
     const base = await this.resolveBase()
-    const url = `${base}${this.config.get().api.pathPrefix}${path}`
+    const pfx = prefix === undefined ? this.config.get().api.pathPrefix : prefix
+    const url = `${base}${pfx}${path}`
     const headers = { 'X-Launcher-Version': this.launcherVersion }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     if (token) headers.Authorization = `Bearer ${token}`
@@ -121,7 +122,7 @@ class ApiClient {
       if (retryDiscovery && !this.config.get().api.baseUrl && this.config.get().api.discovery.enabled) {
         log.warn(`API unreachable at ${base}, rediscovering`)
         await this.resolveBase({ force: true })
-        return this.request(method, path, { body, token, retryDiscovery: false })
+        return this.request(method, path, { body, token, prefix, retryDiscovery: false })
       }
       throw err
     }

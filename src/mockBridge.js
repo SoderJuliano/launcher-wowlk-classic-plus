@@ -17,6 +17,7 @@ export function installMockBridge() {
     wine: { needed: false, found: true },
     api: view === 'login' ? { state: 'incompatible', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', error: 'Server is online but the launcher API (/launcher/v1) is not available yet.' } : { state: 'online', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', apiVersion: 1 },
     user: view === 'login' ? null : { id: 7, username: 'ARTHAS' },
+    supporter: view === 'login' ? null : { supporter: true, since: '2026-11-22T16:59:41Z', donations: 1 },
     authenticated: view !== 'login',
     selectedClient: 'wow32',
     clients: [

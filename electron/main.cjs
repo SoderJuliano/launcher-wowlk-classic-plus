@@ -139,6 +139,10 @@ function createWindow() {
   // Fallback safety timeout for Gamescope / Big Picture window compositor
   setTimeout(showWindow, 1000)
 
+  win.on('focus', () => {
+    controller?.refreshSupporterIfStale?.().catch(() => {})
+  })
+
   // No navigation away from the app, no popups: external links go to the system browser.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (e) => e.preventDefault())
@@ -193,10 +197,10 @@ function registerIpc() {
     if (err) throw new LauncherError('OPEN_FAILED', err)
   })
   handle('openLogs', () => shell.openPath(path.dirname(log.file)))
-  handle('openWebsite', () => {
-    const url = controller.config.get().websiteUrl
-    if (!url) throw new LauncherError('NOT_CONFIGURED', 'Website URL is not configured.')
-    assertSafeUrl(url, { allowHttpLocalhost: false })
+  handle('openWebsite', async () => {
+    const raw = (controller.config.get().websiteUrl || '').trim() || 'https://wow-classic-lk-plus.netlify.app'
+    assertSafeUrl(raw, { allowHttpLocalhost: false })
+    const url = await controller.buildWebsiteUrl(raw)
     return shell.openExternal(url)
   })
   handle('locate', async (id) => {

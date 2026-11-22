@@ -21,6 +21,8 @@ class LauncherController {
     this.launcherUpdate = null
     this.lastError = {} // clientId -> { code, message }
     this.manifestCache = {} // clientId -> { manifest, fetchedAt } | { error }
+    this.supporter = null // { supporter: boolean, since: string | null, donations: number } | null
+    this.supporterCheckedAt = 0
     this.wine = null
     this.periodicTimer = null
   }
@@ -59,6 +61,7 @@ class LauncherController {
       }
     }
     await this.auth.restore()
+    if (this.auth.isAuthenticated()) await this.refreshSupporter()
     await this.refreshManifests()
     this.startPeriodicCheck()
     this.#publish()
@@ -114,6 +117,7 @@ class LauncherController {
       wine: this.wine,
       api: this.api.lastStatus,
       user: this.auth.user,
+      supporter: this.supporter,
       authenticated: this.auth.isAuthenticated(),
       hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
@@ -146,7 +150,7 @@ class LauncherController {
     for (const id of Object.keys(this.config.get().clients)) {
       if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id, user.username, creds?.password)
     }
-    await this.refreshManifests()
+    await Promise.all([this.refreshSupporter(), this.refreshManifests()])
     this.#publish()
     return user
   }
@@ -164,8 +168,54 @@ class LauncherController {
 
   async logout() {
     await this.auth.logout()
+    this.supporter = null
     this.manifestCache = {}
     this.#publish()
+  }
+
+  /** Fetches the supporter badge status for the logged-in account from Pikachu (/donation/v1/me). */
+  async refreshSupporter() {
+    if (!this.auth.isAuthenticated() && !this.auth.session) {
+      this.supporter = null
+      return null
+    }
+    try {
+      const token = await this.auth.accessToken()
+      const res = await this.api.request('GET', '/me', { token, prefix: '/donation/v1' })
+      this.supporterCheckedAt = Date.now()
+      this.supporter = res && typeof res.supporter === 'boolean'
+        ? { supporter: res.supporter, since: res.since ?? null, donations: Number(res.donations) || 0 }
+        : null
+    } catch (err) {
+      log.warn('supporter status unavailable', toPlain(err))
+    }
+    return this.supporter
+  }
+
+  async refreshSupporterIfStale(maxAgeMs = 15_000) {
+    if (!this.auth.isAuthenticated() && !this.auth.session) return null
+    if (Date.now() - this.supporterCheckedAt < maxAgeMs) return this.supporter
+    const prev = JSON.stringify(this.supporter)
+    await this.refreshSupporter()
+    if (JSON.stringify(this.supporter) !== prev) this.#publish()
+    return this.supporter
+  }
+
+  /** Builds the website URL, attaching a fresh independent web SSO token in #sso=... when signed in. */
+  async buildWebsiteUrl(baseUrl) {
+    const clean = String(baseUrl || '').trim().replace(/#.*$/, '')
+    if (!clean) return clean
+    if (!this.auth.isAuthenticated() && !this.auth.session) return clean
+    try {
+      const token = await this.auth.accessToken()
+      const res = await this.api.request('POST', '/auth/web-handoff', { token })
+      if (res && typeof res.refresh_token === 'string' && res.refresh_token) {
+        return `${clean}#sso=${encodeURIComponent(res.refresh_token)}`
+      }
+    } catch (err) {
+      log.warn('web SSO handoff unavailable, opening site normally', toPlain(err))
+    }
+    return clean
   }
 
   async checkApi() {
@@ -420,6 +470,14 @@ class LauncherController {
         await this.refreshManifests()
       } catch (err) {
         log.warn('periodic manifest refresh failed', toPlain(err))
+      }
+
+      if (this.auth.isAuthenticated() || this.auth.session) {
+        try {
+          await this.refreshSupporter()
+        } catch (err) {
+          log.warn('periodic supporter refresh failed', toPlain(err))
+        }
       }
     } else {
       try {

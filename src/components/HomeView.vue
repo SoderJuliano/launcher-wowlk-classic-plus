@@ -96,6 +96,11 @@ async function installWine() {
   }
 }
 const logout = () => run('logout').then(() => (store.skippedLogin = false))
+const supporterTitle = computed(() => {
+  const s = snap.value?.supporter
+  if (!s?.supporter) return ''
+  return s.since ? `Supporter since ${new Date(s.since).toLocaleDateString()} — thank you for supporting the realm!` : 'Thank you for supporting the realm!'
+})
 const ARCH = { x86: '32-bit', x64: '64-bit' }
 </script>
 
@@ -121,7 +126,6 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
         <button type="button" class="lnk" @click="settingsOpen = true" @pointerup.stop.prevent="settingsOpen = true"><Icon name="gear" /> Settings</button>
         <button type="button" class="lnk" @click="run('openGameFolder', client.id)" @pointerup.stop.prevent="run('openGameFolder', client.id)"><Icon name="folder" /> Game folder</button>
         <button type="button" class="lnk" @click="run('openWebsite')" @pointerup.stop.prevent="run('openWebsite')"><Icon name="globe" /> Website</button>
-        <button type="button" class="lnk" @click="run('openLogs')" @pointerup.stop.prevent="run('openLogs')"><Icon name="log" /> Logs</button>
       </div>
     </aside>
 
@@ -129,7 +133,13 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
       <header class="stage__top">
         <ApiStatus />
         <div class="who">
-          <template v-if="snap.user"><Icon name="user" /> {{ snap.user.username }}
+          <template v-if="snap.user">
+            <span class="who__user" :class="{ 'is-supporter': snap.supporter?.supporter }">
+              <Icon name="user" /> {{ snap.user.username }}
+              <span v-if="snap.supporter?.supporter" class="who__badge" :title="supporterTitle">
+                <Icon name="crown" :size="12" /> Supporter
+              </span>
+            </span>
             <button type="button" class="btn btn--ghost btn--icon" title="Log out" aria-label="Log out" @click="logout"><Icon name="logout" /></button>
           </template>
           <button v-else type="button" class="btn btn--ghost" @click="store.skippedLogin = false"><Icon name="lock" /> Sign in</button>
@@ -224,6 +234,14 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .stage { position: relative; display: grid; grid-template-rows: auto 1fr auto; padding: 18px 28px 22px; min-width: 0; min-height: 0; overflow: hidden; }
 .stage__top { display: flex; justify-content: space-between; align-items: center; }
 .who { display: flex; align-items: center; gap: 8px; font: 600 .86rem var(--font-display); color: var(--text-100); letter-spacing: .06em; }
+.who__user { display: inline-flex; align-items: center; gap: 8px; }
+.who__user.is-supporter { color: var(--gold-100); }
+.who__badge {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px;
+  font: 700 .62rem/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--bg-900);
+  background: linear-gradient(135deg, var(--gold-200), var(--gold-400));
+  box-shadow: 0 0 12px -2px var(--gold-glow);
+}
 .hero { align-self: center; max-width: 620px; overflow-y: auto; max-height: 100%; }
 .hero__kicker { font: 600 .7rem/1 var(--font-body); letter-spacing: .3em; text-transform: uppercase; color: var(--ice-200); margin: 0 0 14px; }
 .hero__title { white-space: nowrap; font: 900 clamp(2.2rem, 4.6vw, 3.8rem)/1 var(--font-deco); text-transform: uppercase; background: linear-gradient(180deg, #fff, #d6efff 40%, #7fcbff 75%, #2a93e0); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .6)) drop-shadow(0 0 30px rgba(95, 190, 255, .4)); }

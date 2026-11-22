@@ -1,6 +1,6 @@
 {
   "$comment": "Factory defaults. Users override them in Settings; they are saved to settings.json in the app data folder. No rebuild needed.",
-  "websiteUrl": "",
+  "websiteUrl": "https://wow-classic-lk-plus.netlify.app",
   "api": {
     "baseUrl": "",
     "discovery": {
