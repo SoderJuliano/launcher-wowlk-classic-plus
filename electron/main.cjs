@@ -211,6 +211,7 @@ function registerIpc() {
   handle('installWine', () => controller.installWine())
   handle('detectWineCandidates', () => controller.detectWineCandidates())
   handle('recheckVulkan', () => controller.recheckVulkan())
+  handle('enableNtsync', () => controller.enableNtsync())
   handle('resetWinePrefix', () => controller.resetWinePrefix())
   handle('clearError', (id) => controller.clearError(String(id)))
   handle('saveSettings', (patch) => controller.updateSettings(patch))

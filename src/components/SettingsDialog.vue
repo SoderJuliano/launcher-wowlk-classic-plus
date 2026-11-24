@@ -12,6 +12,10 @@ const form = reactive({
   installDir: s.installDir,
   winePath: s.winePath,
   winePrefix: s.winePrefix,
+  graphicsFiltersEnabled: s.graphicsFiltersEnabled !== false,
+  graphicsUseDxvk: s.graphicsUseDxvk !== false,
+  graphicsResolutionMode: s.graphicsResolutionMode || 'auto',
+  graphicsCustomResolution: s.graphicsCustomResolution || '',
   wow32PackageUrl: s.wow32PackageUrl,
   wow32ManifestUrl: s.wow32ManifestUrl,
   websiteUrl: s.websiteUrl
@@ -21,6 +25,8 @@ const error = ref('')
 const isLinux = computed(() => store.snap.platform.platform !== 'win32')
 const busy = computed(() => !!store.snap.task)
 const detectingWine = ref(false)
+const checkingVulkan = ref(false)
+const enablingNtsync = ref(false)
 const wineCandidates = ref([])
 const resettingPrefix = ref(false)
 const applyingSteamArt = ref(false)
@@ -82,6 +88,40 @@ async function applySteamArt() {
   }
 }
 
+async function recheckVulkan() {
+  checkingVulkan.value = true
+  try {
+    const vk = await call('recheckVulkan')
+    toast(vk?.supported ? 'Drivers Vulkan detectados com sucesso!' : 'Drivers Vulkan ainda ausentes.', vk?.supported ? 'info' : 'error')
+  } catch (e) {
+    toast(`Falha ao verificar Vulkan: ${e.message}`, 'error')
+  } finally {
+    checkingVulkan.value = false
+  }
+}
+
+async function activateNtsync() {
+  enablingNtsync.value = true
+  try {
+    const res = await call('enableNtsync')
+    if (res?.ok) toast('NTsync ativado com sucesso!', 'info')
+    else toast(res?.error || 'Não foi possível ativar o NTsync automaticamente.', 'error')
+  } catch (e) {
+    toast(`Falha ao ativar NTsync: ${e.message}`, 'error')
+  } finally {
+    enablingNtsync.value = false
+  }
+}
+
+async function copyCmd(cmd) {
+  try {
+    await navigator.clipboard.writeText(cmd)
+    toast('Comando copiado!', 'info')
+  } catch {
+    toast('Selecione e copie o comando manualmente.', 'info')
+  }
+}
+
 async function save() {
   error.value = ''
   saving.value = true
@@ -89,6 +129,10 @@ async function save() {
     'api.baseUrl': form.apiBaseUrl.trim(),
     'api.discovery.enabled': form.discoveryEnabled,
     realmlist: form.realmlist.trim(),
+    'graphics.filtersEnabled': !!form.graphicsFiltersEnabled,
+    'graphics.useDxvk': !!form.graphicsUseDxvk,
+    'graphics.resolutionMode': form.graphicsResolutionMode,
+    'graphics.customResolution': form.graphicsResolutionMode === 'custom' ? form.graphicsCustomResolution.trim() : '',
     'clients.wow32.basePackage.url': form.wow32PackageUrl.trim(),
     'clients.wow32.manifestUrl': form.wow32ManifestUrl.trim(),
     websiteUrl: form.websiteUrl.trim()
@@ -191,6 +235,73 @@ async function save() {
           </div>
           <small class="hint">Aplica o plano de fundo (1920x620), capa de biblioteca e logo transparente diretamente nos atalhos da Steam e exporta cópias para a pasta Imagens.</small>
         </template>
+
+        <h3>Gráficos, Vulkan & Filtros (F11)</h3>
+        <div class="wine-status-card">
+          <div class="wine-status-header">
+            <span class="wine-status-label">Drivers Vulkan (DXVK<template v-if="store.snap.vulkan?.wineArch"> · {{ store.snap.vulkan.wineArch === 'x64' ? '64-bit WoW64' : '32-bit' }}</template>):</span>
+            <span class="wine-status-val" :class="store.snap.vulkan?.supported ? 'ok' : 'err'">
+              {{ store.snap.vulkan?.supported ? 'Detectado e pronto' : 'Ausente / Incompleto' }}
+            </span>
+          </div>
+          <div v-if="store.snap.vulkan?.gpus?.length || store.snap.vulkan?.distro?.prettyName" class="wine-status-path hint">
+            <template v-if="store.snap.vulkan.distro?.prettyName">{{ store.snap.vulkan.distro.prettyName }}</template>
+            <template v-if="store.snap.vulkan.gpus?.length"> · GPU: {{ store.snap.vulkan.gpus.join(', ').toUpperCase() }}</template>
+          </div>
+          <div v-if="store.snap.vulkan && !store.snap.vulkan.supported && store.snap.vulkan.installCommand" class="wine-status-path" style="margin-top: 8px; display: flex; gap: 6px; align-items: center;">
+            <code style="flex:1; font-size:.74rem; color: var(--gold-200); user-select: all;">{{ store.snap.vulkan.installCommand }}</code>
+            <button type="button" class="btn btn--gold btn--sm" @click="copyCmd(store.snap.vulkan.installCommand)">Copiar</button>
+          </div>
+          <div class="actions-row" style="margin-top: 8px;">
+            <button type="button" class="btn btn--outline btn--sm" :disabled="checkingVulkan" @click="recheckVulkan">
+              <Icon name="refresh" /> {{ checkingVulkan ? 'Verificando…' : 'Verificar Vulkan' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="isLinux && store.snap.linuxPerf" class="wine-status-card">
+          <div class="wine-status-header">
+            <span class="wine-status-label">Sincronização de Threads (NTsync):</span>
+            <span class="wine-status-val" :class="store.snap.linuxPerf.ntsync?.loaded ? 'ok' : 'hint'">
+              {{ store.snap.linuxPerf.ntsync?.loaded ? 'Ativo (/dev/ntsync)' : (store.snap.linuxPerf.ntsync?.moduleAvailable ? 'Disponível (usando FSYNC)' : 'Usando FSYNC automático') }}
+            </span>
+          </div>
+          <div v-if="store.snap.linuxPerf.picom?.running" class="wine-status-path hint">
+            Compositor Picom detectado — regra de unredirect para Wow.exe aplicada automaticamente ao iniciar.
+          </div>
+          <div v-if="store.snap.linuxPerf.ntsync?.moduleAvailable && !store.snap.linuxPerf.ntsync?.loaded" class="actions-row" style="margin-top: 8px;">
+            <button type="button" class="btn btn--gold btn--sm" :disabled="enablingNtsync" @click="activateNtsync">
+              <span v-if="enablingNtsync" class="spinner" />
+              {{ enablingNtsync ? 'Ativando…' : 'Ativar NTsync agora' }}
+            </button>
+            <button type="button" class="btn btn--ghost btn--sm" @click="copyCmd(store.snap.linuxPerf.ntsync.enableCommand)">
+              Copiar comando sudo
+            </button>
+          </div>
+        </div>
+
+        <label class="check">
+          <input v-model="form.graphicsFiltersEnabled" type="checkbox" :disabled="!form.graphicsUseDxvk" />
+          Ativar filtros de cor, profundidade e nitidez (CAS + SMAA + Curves + Clarity + FakeHDR · tecla <strong>F11</strong> no jogo)
+        </label>
+        <label class="check">
+          <input v-model="form.graphicsUseDxvk" type="checkbox" />
+          Usar renderizador DXVK via Vulkan (recomendado; desmarque apenas se a GPU não suportar Vulkan)
+        </label>
+
+        <label class="field">
+          <span>Resolução do jogo</span>
+          <select v-model="form.graphicsResolutionMode" class="input">
+            <option value="auto">Automática (resolução nativa do monitor)</option>
+            <option value="manual">Manter configuração manual de dentro do jogo</option>
+            <option value="custom">Personalizada (forçar resolução abaixo)</option>
+          </select>
+          <small class="hint">No modo automático, o launcher corrige a resolução padrão do pacote (2560x1080) para caber no seu monitor.</small>
+        </label>
+        <label v-if="form.graphicsResolutionMode === 'custom'" class="field">
+          <span>Resolução personalizada (ex: 1920x1080)</span>
+          <input v-model="form.graphicsCustomResolution" class="input" placeholder="1920x1080" spellcheck="false" />
+        </label>
 
         <h3>Servidor & Conexão</h3>
         <label class="field"><span>Realmlist</span>

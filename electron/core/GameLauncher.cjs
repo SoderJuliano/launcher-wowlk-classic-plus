@@ -12,6 +12,7 @@ const { LauncherError } = require('./errors.cjs')
 const { resolveInside } = require('./pathSafety.cjs')
 const platform = require('./PlatformService.cjs')
 const { isSteamDeck } = require('./realmlist.cjs')
+const { prepareLinuxGraphics, prepareWindowsGraphics } = require('./GraphicsManager.cjs')
 const log = require('./logger.cjs')
 
 /** Testa um bit num bitmap de capabilities do sysfs (palavras hex, a mais significativa primeiro). */
@@ -456,6 +457,7 @@ class GameLauncher {
     const exe = resolveInside(dir, client.executable)
     let command = exe
     let args = []
+    let defaultArgs = []
     const env = platform.cleanEnvForSystemBinary ? platform.cleanEnvForSystemBinary({ ...process.env }) : { ...process.env }
 
     const dataDir = path.join(dir, 'Data')
@@ -572,42 +574,7 @@ class GameLauncher {
         } catch {}
       }
 
-      // Desativa Gamescope WSI e bloqueios de VSync / Direct Scanout no SteamOS/KWin/DXVK
-      env.ENABLE_GAMESCOPE_WSI = '0'
-      env.vblank_mode = '0'
-      env.__GL_SYNC_TO_VBLANK = '0'
-      env.KWIN_X11_NO_SYNC_TO_VBLANK = '1'
-      env.KWIN_DRM_NO_DIRECT_SCANOUT = '1'
-      env.SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS = '0'
-      env.SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD = '1'
-
-      env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=0;dxgi.syncInterval=0;dxvk.tearFree=False;d3d9.maxFrameLatency=3;d3d9.maxFrameRate=60;d3d9.numBackBuffers=3'
-      try {
-        const dxvkConf = path.join(dir, 'dxvk.conf')
-        const safeDxvkConf = [
-          'd3d9.deferSurfaceCreation = False',
-          'd3d9.presentInterval = 0',
-          'dxgi.syncInterval = 0',
-          'dxvk.tearFree = False',
-          'd3d9.maxFrameLatency = 3',
-          'd3d9.maxFrameRate = 60',
-          'd3d9.numBackBuffers = 3',
-          'dxvk.numCompilerThreads = 2',
-          '',
-        ].join('\n')
-        fs.writeFileSync(dxvkConf, safeDxvkConf, 'utf8')
-      } catch {}
-
-      // Se /opt/reshade não existir (como no Steam Deck), desativa vkBasalt para evitar crash/tela preta no Vulkan
-      if (!fs.existsSync('/opt/reshade/shaders')) {
-        env.ENABLE_VKBASALT = '0'
-        env.VKBASALT_CONFIG_FILE = '/dev/null'
-      }
-    }
-
-    let defaultArgs = []
-
-    if (this.platform !== 'win32') {
+      const deck = isSteamDeck()
       const cfg = this.config.get()
       const internalWine = path.join(this.config.dataDir, 'runtime', 'wine', 'bin', 'wine')
       let wine = null
@@ -628,8 +595,92 @@ class GameLauncher {
         }
       }
       if (!wine || !wine.found) throw new LauncherError('WINE_MISSING', 'Wine is required to run the game on this system. Install it (e.g. "sudo pacman -S wine" or "sudo apt install wine") or set its path in Settings.')
+      const wineArch = platform.detectElfArch ? platform.detectElfArch(wine.path) : null
       const prefix = cfg.wine?.prefix || path.join(this.config.dataDir, 'wineprefix')
       fs.mkdirSync(prefix, { recursive: true })
+
+      env.SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS = '0'
+      env.SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD = '1'
+      env.DXVK_STATE_CACHE = '1'
+
+      if (deck) {
+        // Steam Deck / Gamescope: preserva ajustes validados para o compositor do SteamOS
+        env.ENABLE_GAMESCOPE_WSI = '0'
+        env.vblank_mode = '0'
+        env.__GL_SYNC_TO_VBLANK = '0'
+        env.KWIN_X11_NO_SYNC_TO_VBLANK = '1'
+        env.KWIN_DRM_NO_DIRECT_SCANOUT = '1'
+        env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=0;dxgi.syncInterval=0;dxvk.tearFree=False;d3d9.maxFrameLatency=3;d3d9.maxFrameRate=60;d3d9.numBackBuffers=3'
+        try {
+          const dxvkConf = path.join(dir, 'dxvk.conf')
+          const deckDxvkConf = [
+            'd3d9.deferSurfaceCreation = False',
+            'd3d9.presentInterval = 0',
+            'dxgi.syncInterval = 0',
+            'dxvk.tearFree = False',
+            'd3d9.maxFrameLatency = 3',
+            'd3d9.maxFrameRate = 60',
+            'd3d9.numBackBuffers = 3',
+            'dxvk.numCompilerThreads = 2',
+            '',
+          ].join('\n')
+          fs.writeFileSync(dxvkConf, deckDxvkConf, 'utf8')
+        } catch {}
+      } else {
+        // Desktop Linux (Arch/Archcraft/Garuda/Ubuntu/Fedora): sincroniza DXVK com o refresh do monitor
+        // (evita "60 FPS com cara de 15 FPS" causado por dois relógios 60Hz dessincronizados com compositor),
+        // reduz latência de fila de frames (maxFrameLatency=1) e libera todas as threads de CPU para shaders.
+        env.DXVK_CONFIG = 'd3d9.deferSurfaceCreation=False;d3d9.presentInterval=1;dxgi.syncInterval=1;d3d9.maxFrameRate=0;d3d9.maxFrameLatency=1;dxvk.numCompilerThreads=0'
+        try {
+          const dxvkConf = path.join(dir, 'dxvk.conf')
+          const desktopDxvkConf = [
+            'd3d9.deferSurfaceCreation = False',
+            'd3d9.presentInterval = 1',
+            'dxgi.syncInterval = 1',
+            'd3d9.maxFrameRate = 0',
+            'd3d9.maxFrameLatency = 1',
+            'dxvk.numCompilerThreads = 0',
+            '',
+          ].join('\n')
+          fs.writeFileSync(dxvkConf, desktopDxvkConf, 'utf8')
+        } catch {}
+
+        // Se o compositor picom estiver rodando (comum no Archcraft/Openbox/bspwm/i3), garante regra de
+        // unredirect para Wow.exe evitando judder e travamentos de composição.
+        try {
+          if (platform.ensurePicomUnredirect) {
+            const picomRes = platform.ensurePicomUnredirect()
+            if (picomRes?.applied) {
+              log.info(`Auto-configured picom unredirect for Wow.exe (${picomRes.strategy}) in ${picomRes.configPath}`)
+            }
+          }
+        } catch (e) {
+          log.warn('picom auto-configuration skipped', e.message)
+        }
+      }
+
+      // Quando /dev/ntsync não está carregado no kernel, ativa WINEFSYNC/WINEESYNC para o Wine não
+      // cair na sincronização lenta via wineserver (causa travamentos e picos de frametime com DXVK).
+      let hasNtsync = false
+      try {
+        fs.accessSync('/dev/ntsync', fs.constants.R_OK | fs.constants.W_OK)
+        hasNtsync = true
+      } catch {}
+      if (!hasNtsync) {
+        env.WINEFSYNC = env.WINEFSYNC || '1'
+        env.WINEESYNC = env.WINEESYNC || '1'
+        log.info('/dev/ntsync unavailable; enabled WINEFSYNC=1 and WINEESYNC=1 fallback')
+      }
+
+      // Configura DXVK e filtros pós-processamento sandboxed (vkBasalt com F11, 64-bit WoW64 e 32-bit)
+      prepareLinuxGraphics({
+        gameDir: dir,
+        dataDir: this.config.dataDir,
+        env,
+        graphicsCfg: cfg.graphics || {},
+        deck,
+        wineArch
+      })
 
       command = wine.path
       defaultArgs = []
@@ -643,7 +694,7 @@ class GameLauncher {
       if (!wine.path.startsWith('/usr/bin/')) {
         env.LD_LIBRARY_PATH = `${wineLibDir}:${env.LD_LIBRARY_PATH || ''}`
       }
-      log.info(`Using Wine runner: ${command} with prefix: ${prefix}`)
+      log.info(`Using Wine runner: ${command} (arch=${wineArch || 'unknown'}) with prefix: ${prefix}`)
 
       // Limpa LD_PRELOAD de bibliotecas 64-bit da Steam que causam crash no Wine 32-bit
       if (env.LD_PRELOAD) {
@@ -653,10 +704,10 @@ class GameLauncher {
       env.WINEPREFIX = prefix
       env.WINEDEBUG = env.WINEDEBUG || '-all'
       const session = (process.env.XDG_CURRENT_DESKTOP === 'gamescope' || process.env.GAMESCOPE_WAYLAND_DISPLAY) ? 'gamescope (Modo Jogo)' : (process.env.XDG_CURRENT_DESKTOP || 'desktop')
-      log.info(`session: ${session}; wine: ${wine.path} (${wine.version}); DISPLAY=${env.DISPLAY || ''}; SteamGameId=${env.SteamGameId || ''}; LD_LIBRARY_PATH=${env.LD_LIBRARY_PATH || ''}; LD_PRELOAD=${env.LD_PRELOAD || ''}`)
-      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano,
-      // e garante que d3d9 use o DXVK da pasta do jogo
-      env.WINEDLLOVERRIDES = 'winedbg.exe=d;d3d9,dxgi=n,b'
+      log.info(`session: ${session}; wine: ${wine.path} (${wine.version}); ntsync=${hasNtsync}; DISPLAY=${env.DISPLAY || ''}; SteamGameId=${env.SteamGameId || ''}; LD_LIBRARY_PATH=${env.LD_LIBRARY_PATH || ''}; LD_PRELOAD=${env.LD_PRELOAD || ''}`)
+      // Desativa o winedbg para evitar que um diálogo de crash fique travando o processo em segundo plano;
+      // WINEDLLOVERRIDES (DXVK vs WineD3D fallback) já foi definido por prepareLinuxGraphics acima.
+      env.WINEDLLOVERRIDES = env.WINEDLLOVERRIDES || 'winedbg.exe=d;d3d9,dxgi=n,b'
       env.WINE_CRASH_REPORT_DIR = '/dev/null'
 
       if (client.architecture === 'x86') env.WINEARCH = env.WINEARCH || 'win64' // modern Wine runs 32-bit apps in a win64 prefix (WoW64)
@@ -666,7 +717,14 @@ class GameLauncher {
         onStatus?.('Preparing Wine (first run, this can take a minute)…')
         await this.#wineboot(wine.path, env)
       }
-
+    } else {
+      // Windows: controla DXVK e filtros pós-processamento sandboxed (ReShade 32-bit Vulkan layer com F11)
+      prepareWindowsGraphics({
+        gameDir: dir,
+        dataDir: this.config.dataDir,
+        env,
+        graphicsCfg: this.config.get().graphics || {}
+      })
     }
 
     log.info(`launching ${id}: ${command} ${args.join(' ')}`)

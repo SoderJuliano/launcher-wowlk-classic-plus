@@ -2,7 +2,7 @@
 // Minimal, explicit bridge. The renderer has no Node access.
 const { contextBridge, ipcRenderer } = require('electron')
 
-const CALLS = ['state', 'locate', 'login', 'logout', 'checkApi', 'selectClient', 'setSupporterContent', 'setGameLanguage', 'install', 'update', 'repair', 'cancel', 'play', 'clearError', 'saveSettings', 'openGameFolder', 'openLogs', 'openWebsite', 'openExternal', 'pickFolder', 'pickFile', 'window', 'version', 'installWine', 'detectWineCandidates', 'recheckVulkan', 'resetWinePrefix', 'installSteamArt']
+const CALLS = ['state', 'locate', 'login', 'logout', 'checkApi', 'selectClient', 'setSupporterContent', 'setGameLanguage', 'install', 'update', 'repair', 'cancel', 'play', 'clearError', 'saveSettings', 'openGameFolder', 'openLogs', 'openWebsite', 'openExternal', 'pickFolder', 'pickFile', 'window', 'version', 'installWine', 'detectWineCandidates', 'recheckVulkan', 'enableNtsync', 'resetWinePrefix', 'installSteamArt']
 const EVENTS = ['state', 'progress']
 
 const api = {}

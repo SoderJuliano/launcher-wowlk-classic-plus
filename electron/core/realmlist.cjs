@@ -1,15 +1,17 @@
 'use strict'
 /**
- * Realmlist configuration for the 3.3.5a client. Verified against the real package:
+ * Realmlist and video/quality defaults configuration for the 3.3.5a client:
  *   Data/<locale>/realmlist.wtf   ← the file the client reads
  *   Data/realmlist.wtf            ← legacy copy shipped in the package (kept in sync)
- *   WTF/Config.wtf                ← `SET realmList "..."` (kept in sync so it never overrides)
+ *   WTF/Config.wtf                ← `SET realmList "..."` + resolution & visual defaults
  */
 const fs = require('node:fs')
 const path = require('node:path')
 const { LauncherError } = require('./errors.cjs')
 
 const REALM_RE = /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/
+const RES_RE = /^(\d{3,4})x(\d{3,4})$/
+const PACKAGE_DEFAULT_RES = '2560x1080'
 
 function isSteamDeck() {
   if (process.env.STEAM_DECK === '1' || process.env.SteamDeck === '1' || process.env.SteamOS === '1') return true
@@ -41,7 +43,48 @@ function writeAtomic(file, content) {
   fs.renameSync(tmp, file)
 }
 
-function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, password) {
+function setCvar(text, key, value) {
+  const line = `SET ${key} "${value}"`
+  const re = new RegExp(`^SET ${key} .*$`, 'im')
+  return re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
+}
+
+function setCvarIfMissing(text, key, value) {
+  const re = new RegExp(`^SET ${key} `, 'im')
+  if (re.test(text)) return text
+  return `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET ${key} "${value}"\r\n`
+}
+
+function getCvar(text, key) {
+  const m = new RegExp(`^SET ${key} "([^"]*)"`, 'im').exec(text)
+  return m ? m[1] : null
+}
+
+/**
+ * Decides whether `gxResolution` in Config.wtf should be updated to match the primary monitor.
+ * Fixes the common 3.3.5a bug where the package ships with "2560x1080" hardcoded: on 1920x1080
+ * or smaller screens the game rejects 2560x1080 and falls back to 800x600 / 1024x768.
+ */
+function resolveTargetResolution(currentRes, displaySize, { resolutionMode = 'auto', customResolution = '' } = {}) {
+  if (resolutionMode === 'manual') return null
+  if (resolutionMode === 'custom' && RES_RE.test(String(customResolution || '').trim())) {
+    return String(customResolution).trim()
+  }
+  if (!displaySize || !displaySize.width || !displaySize.height) return null
+  const w = Math.round(Number(displaySize.width))
+  const h = Math.round(Number(displaySize.height))
+  if (w < 800 || h < 600) return null
+  const nativeRes = `${w}x${h}`
+  if (!currentRes || !RES_RE.test(currentRes)) return nativeRes
+  if (currentRes === PACKAGE_DEFAULT_RES && nativeRes !== PACKAGE_DEFAULT_RES) return nativeRes
+  const [, cwStr, chStr] = RES_RE.exec(currentRes)
+  const cw = Number(cwStr)
+  const ch = Number(chStr)
+  if (cw > w || ch > h) return nativeRes
+  return null
+}
+
+function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, password, options = {}) {
   if (!REALM_RE.test(realmlist || '')) throw new LauncherError('CONFIG_INVALID', `Invalid realmlist: ${realmlist}`)
   const locales = detectLocales(gameDir)
   if (!locales.length) throw new LauncherError('INSTALL_INVALID', 'No locale folder found in Data/.')
@@ -58,19 +101,16 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
   const cfg = path.join(gameDir, 'WTF', 'Config.wtf')
   fs.mkdirSync(path.dirname(cfg), { recursive: true })
   let text = fs.existsSync(cfg) ? fs.readFileSync(cfg, 'latin1') : ''
-  const setLine = `SET realmList "${realmlist}"`
-  text = /^SET realmList .*$/im.test(text) ? text.replace(/^SET realmList .*$/im, setLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${setLine}\r\n`
+  text = setCvar(text, 'realmList', realmlist)
   const locale = locales.includes(preferredLocale) ? preferredLocale : locales[0]
-  if (!/^SET locale /im.test(text)) text += `SET locale "${locale}"\r\n`
+  text = setCvarIfMissing(text, 'locale', locale)
   if (accountName) {
-    const accLine = `SET accountName "${accountName}"`
-    text = /^SET accountName .*$/im.test(text) ? text.replace(/^SET accountName .*$/im, accLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${accLine}\r\n`
-    if (!/^SET accounttype /im.test(text)) text += `SET accounttype "LK"\r\n`
+    text = setCvar(text, 'accountName', accountName)
+    text = setCvarIfMissing(text, 'accounttype', 'LK')
   }
   if (password) {
     const escaped = String(password).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    const listLine = `SET accountList "AUTOLOGIN:${escaped}"`
-    text = /^SET accountList .*$/im.test(text) ? text.replace(/^SET accountList .*$/im, listLine) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${listLine}\r\n`
+    text = setCvar(text, 'accountList', `AUTOLOGIN:${escaped}`)
   }
 
   // Previne vídeos de introdução (tela preta no Wine/Steam Deck) e bypassa termos já aceitos
@@ -86,19 +126,27 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
     ['readContest', '1'],
     ['scriptErrors', '0']
   ]
-  for (const [k, v] of commonOpts) {
-    const line = `SET ${k} "${v}"`
-    const re = new RegExp(`^SET ${k} .*$`, 'im')
-    text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
-  }
+  for (const [k, v] of commonOpts) text = setCvar(text, k, v)
+
+  // Qualidade visual padrão do servidor (só aplica se o CVar ainda não existir, preservando escolha do jogador)
+  const qualityDefaults = [
+    ['shadowLevel', '3'],
+    ['extShadowQuality', '3'],
+    ['specular', '1'],
+    ['pixelShaders', '1'],
+    ['ffxGlow', '1'],
+    ['textureFilteringMode', '5'],
+    ['projectedTextures', '1'],
+    ['waterDetail', '2'],
+    ['farclip', '1277'],
+    ['horizonfarclip', '2112'],
+    ['groundEffectDist', '140'],
+    ['groundEffectDensity', '64'],
+    ['objectFade', '0']
+  ]
+  for (const [k, v] of qualityDefaults) text = setCvarIfMissing(text, k, v)
 
   // Steam Deck (Modo Desktop e Modo Jogo): sempre janela 1280x800.
-  // 1. Tela cheia exclusiva (gxWindow "0") ou maximizada sem borda (gxMaximize "1") com este Wine
-  //    deu tela preta e travou o aparelho em todos os testes.
-  // 2. No Modo Jogo não existe "janela": o Gamescope mostra a janela do jogo ocupando a tela
-  //    inteira (a tela do Deck é exatamente 1280x800; numa TV ele amplia). A barra de baixo só
-  //    aparece no Modo Desktop, que é o painel do KDE.
-  // Nos outros Linux a resolução e o modo de janela são escolha do jogador; só garante o cursor.
   if (isSteamDeck()) {
     for (const k of ['windowResizeLock', 'gxWindow', 'gxMaximize', 'gxResolution', 'scriptErrors']) {
       text = text.replace(new RegExp(`^SET ${k} .*\\r?\\n?`, 'gim'), '')
@@ -118,14 +166,24 @@ function applyRealmlist(gameDir, realmlist, preferredLocale, accountName, passwo
       ['scriptErrors', '0'],
       ['Sound_EnableSoundWhenGameIsInBG', '1']
     ]
-    for (const [k, v] of deckOpts) {
-      const line = `SET ${k} "${v}"`
-      const re = new RegExp(`^SET ${k} .*$`, 'im')
-      text = re.test(text) ? text.replace(re, line) : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}${line}\r\n`
+    for (const [k, v] of deckOpts) text = setCvar(text, k, v)
+  } else {
+    const currentRes = getCvar(text, 'gxResolution')
+    const targetRes = resolveTargetResolution(currentRes, options.displaySize, {
+      resolutionMode: options.resolutionMode,
+      customResolution: options.customResolution
+    })
+    if (targetRes) {
+      text = setCvar(text, 'gxResolution', targetRes)
+      text = setCvar(text, 'gxWindow', '1')
+      text = setCvar(text, 'gxMaximize', '1')
+      text = setCvar(text, 'windowResizeLock', '0')
     }
-  } else if (process.platform === 'linux') {
-    if (!/^SET gxCursor /im.test(text) || /^SET gxCursor "0"/im.test(text)) {
-      text = /^SET gxCursor .*$/im.test(text) ? text.replace(/^SET gxCursor .*$/im, 'SET gxCursor "1"') : `${text.replace(/\s*$/, '')}${text ? '\r\n' : ''}SET gxCursor "1"\r\n`
+    if ((options.platformName || process.platform) === 'linux') {
+      const curCursor = getCvar(text, 'gxCursor')
+      if (!curCursor || curCursor === '0') {
+        text = setCvar(text, 'gxCursor', '1')
+      }
     }
   }
   writeAtomic(cfg, text)
@@ -140,4 +198,12 @@ function readRealmlist(gameDir, locale) {
   } catch { return null }
 }
 
-module.exports = { applyRealmlist, readRealmlist, detectLocales, isSteamDeck, REALM_RE }
+module.exports = {
+  applyRealmlist,
+  readRealmlist,
+  detectLocales,
+  isSteamDeck,
+  resolveTargetResolution,
+  REALM_RE,
+  RES_RE
+}

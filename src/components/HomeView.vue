@@ -102,10 +102,17 @@ async function installWine() {
   }
 }
 const checkingVulkan = ref(false)
+const enablingNtsync = ref(false)
+const dismissedNtsync = ref(false)
 const showVulkanWarn = computed(() => {
   const vk = snap.value?.vulkan
   if (!vk || vk.supported) return false
   return snap.value?.settings?.graphicsUseDxvk !== false
+})
+const showNtsyncTip = computed(() => {
+  if (dismissedNtsync.value) return false
+  const lp = snap.value?.linuxPerf
+  return !!(lp?.platform === 'linux' && lp.ntsync?.moduleAvailable && !lp.ntsync?.loaded)
 })
 async function copyText(text, label = 'Comando copiado!') {
   try {
@@ -119,11 +126,26 @@ async function recheckVulkan() {
   checkingVulkan.value = true
   try {
     const vk = await call('recheckVulkan')
-    toast(vk?.supported ? 'Drivers Vulkan detectados com sucesso!' : 'Drivers Vulkan 32-bit ainda não foram encontrados.', vk?.supported ? 'info' : 'error')
+    toast(vk?.supported ? 'Drivers Vulkan detectados com sucesso!' : 'Drivers Vulkan ainda não foram encontrados.', vk?.supported ? 'info' : 'error')
   } catch (e) {
     toast(e.message)
   } finally {
     checkingVulkan.value = false
+  }
+}
+async function activateNtsync() {
+  enablingNtsync.value = true
+  try {
+    const res = await call('enableNtsync')
+    if (res?.ok) {
+      toast('NTsync ativado com sucesso! Os travamentos do Wine serão eliminados.', 'info')
+    } else {
+      toast(res?.error || 'Não foi possível ativar o NTsync automaticamente. Use o comando no terminal.', 'error')
+    }
+  } catch (e) {
+    toast(e.message)
+  } finally {
+    enablingNtsync.value = false
   }
 }
 async function openExternal(url) {
@@ -305,6 +327,28 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
             </div>
           </div>
         </div>
+        <div v-if="showNtsyncTip" class="alert alert--info hero__warn wine-alert">
+          <Icon name="alert" :size="16" />
+          <div class="wine-alert__content">
+            <p>
+              <strong>Otimização Linux (NTsync):</strong>
+              Seu kernel suporta NTsync, mas o módulo não está ativo. O launcher já aplica FSYNC automaticamente, porém ativar NTsync reduz ainda mais travamentos no Wine/DXVK.
+            </p>
+            <div v-if="snap.linuxPerf?.ntsync?.enableCommand" class="cmd-box cmd-box--info">
+              <code>{{ snap.linuxPerf.ntsync.enableCommand }}</code>
+              <button type="button" class="btn btn--wine btn--xs" @click="copyText(snap.linuxPerf.ntsync.enableCommand, 'Comando copiado!')">Copiar</button>
+            </div>
+            <div class="warn-actions">
+              <button type="button" class="btn btn--wine" :disabled="enablingNtsync" @click="activateNtsync">
+                <span v-if="enablingNtsync" class="spinner" />
+                {{ enablingNtsync ? 'Ativando NTsync…' : 'Ativar NTsync agora' }}
+              </button>
+              <button type="button" class="btn btn--ghost btn--xs" @click="dismissedNtsync = true">
+                Dispensar
+              </button>
+            </div>
+          </div>
+        </div>
         <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
           <div class="wine-alert__content">
@@ -433,18 +477,25 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .hero__facts div { padding: 8px 12px; border-radius: 4px; background: rgba(3, 6, 10, .6); border: 1px solid var(--line); }
 .hero__facts dt { font: 600 .6rem/1 var(--font-body); letter-spacing: .18em; text-transform: uppercase; color: var(--text-400); margin-bottom: 5px; }
 .hero__facts dd { margin: 0; font-size: .84rem; color: var(--text-100); }
-.hero__warn { margin-top: 16px; max-width: 560px; }
-.hero__warn code { color: var(--gold-200); }
+.hero__warn { margin-top: 16px; max-width: 580px; }
+.hero__warn strong { color: #ffe08a; }
+.hero__warn code { color: #ffd97d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .wine-alert { display: flex; align-items: flex-start; gap: 12px; }
 .wine-alert__content { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-.wine-alert__content p { margin: 0; font-size: .82rem; line-height: 1.4; }
-.btn--wine { align-self: flex-start; height: 32px; padding: 0 14px; font-size: .72rem; background: var(--gold-400); color: #1a1005; font-weight: 700; border-radius: 4px; border: 1px solid var(--gold-200); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.btn--wine:hover:not(:disabled) { filter: brightness(1.15); }
+.wine-alert__content p { margin: 0; font-size: .84rem; line-height: 1.48; color: #f6efe0; text-shadow: 0 1px 2px rgba(0, 0, 0, .65); }
+.alert--info .wine-alert__content p { color: #e4f2ff; }
+.alert--info strong { color: #8ad4ff; }
+.btn--wine { align-self: flex-start; height: 32px; padding: 0 14px; font-size: .72rem; background: linear-gradient(180deg, #f5d27a, #d4a03a); color: #1a1005; font-weight: 700; border-radius: 4px; border: 1px solid #ffe8a8; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, .4); }
+.btn--wine:hover:not(:disabled) { filter: brightness(1.1); }
 .btn--xs { height: 28px; padding: 0 10px; font-size: .7rem; }
-.cmd-box { display: flex; align-items: center; gap: 8px; background: rgba(0, 0, 0, .45); border: 1px solid rgba(240, 192, 64, .25); border-radius: 4px; padding: 6px 8px; }
-.cmd-box code { flex: 1; font-size: .72rem; word-break: break-all; user-select: all; color: var(--gold-200); }
-.warn-hint { font-size: .74rem !important; opacity: .88; }
-.warn-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cmd-box { display: flex; align-items: center; gap: 8px; background: rgba(4, 7, 12, .94); border: 1px solid rgba(240, 192, 96, .42); border-radius: 4px; padding: 7px 10px; }
+.cmd-box--info { border-color: rgba(79, 179, 247, .42); }
+.cmd-box code { flex: 1; font-size: .74rem; word-break: break-all; user-select: all; color: #ffe294; }
+.cmd-box--info code { color: #a8dcff; }
+.warn-hint { font-size: .76rem !important; color: #e5dcc8 !important; opacity: 1; }
+.warn-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.warn-actions .btn--ghost { background: rgba(255, 255, 255, .09); color: #f2f5fa; border-color: rgba(255, 255, 255, .26); }
+.warn-actions .btn--ghost:hover:not(:disabled) { background: rgba(255, 255, 255, .16); border-color: var(--ice-300); }
 
 @media (max-height: 720px) {
   .stage { padding: 10px 20px 12px; }

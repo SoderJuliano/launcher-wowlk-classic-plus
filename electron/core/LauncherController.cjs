@@ -31,6 +31,7 @@ class LauncherController {
     this.initialized = false
     this.wine = null
     this.vulkan = null
+    this.linuxPerf = null
     this.periodicTimer = null
   }
 
@@ -50,7 +51,8 @@ class LauncherController {
     if (this.wine?.found && this.wine?.path && !this.config.get().wine?.path && !this.wine.isProton) {
       try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
     }
-    this.vulkan = platform.detectVulkan()
+    this.vulkan = platform.detectVulkan(platform.platform, { winePath: this.wine?.path })
+    this.linuxPerf = platform.detectLinuxPerformance ? platform.detectLinuxPerformance() : null
     await this.api.health()
     if (this.api.lastStatus.state === 'online') {
       try {
@@ -155,6 +157,7 @@ class LauncherController {
       platform: platform.describe(),
       wine: this.wine,
       vulkan: this.vulkan,
+      linuxPerf: this.linuxPerf,
       api: this.api.lastStatus,
       user: this.auth.user,
       supporter: this.supporter,
@@ -786,6 +789,7 @@ class LauncherController {
       if (this.wine?.found && this.wine?.path) {
         try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
       }
+      this.vulkan = platform.detectVulkan(platform.platform, { winePath: this.wine?.path })
       log.info('internal wine runtime installed successfully', this.wine)
     } catch (err) {
       log.error('failed to install wine runtime', toPlain(err))
@@ -880,7 +884,10 @@ class LauncherController {
       this.api.baseUrl = null
       await this.api.health()
     }
-    if (patch['wine.path'] !== undefined) this.wine = await platform.detectWine(after.wine.path, platform.platform, [this.internalWinePath()])
+    if (patch['wine.path'] !== undefined) {
+      this.wine = await platform.detectWine(after.wine.path, platform.platform, [this.internalWinePath()])
+      this.vulkan = platform.detectVulkan(platform.platform, { winePath: this.wine?.path })
+    }
     // Push a new realmlist or video setting into installed clients right away.
     if (patch.realmlist || patch['graphics.resolutionMode'] !== undefined || patch['graphics.customResolution'] !== undefined) {
       for (const id of Object.keys(after.clients)) if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id)
@@ -894,9 +901,18 @@ class LauncherController {
   }
 
   recheckVulkan() {
-    this.vulkan = platform.detectVulkan()
+    this.vulkan = platform.detectVulkan(platform.platform, { winePath: this.wine?.path })
+    this.linuxPerf = platform.detectLinuxPerformance ? platform.detectLinuxPerformance() : null
     this.#publish()
     return this.vulkan
+  }
+
+  async enableNtsync() {
+    if (!platform.enableLinuxNtsync) return { ok: false, error: 'Não suportado nesta plataforma.' }
+    const res = await platform.enableLinuxNtsync()
+    this.linuxPerf = platform.detectLinuxPerformance ? platform.detectLinuxPerformance() : null
+    this.#publish()
+    return { ...res, linuxPerf: this.linuxPerf }
   }
 
   async resetWinePrefix() {

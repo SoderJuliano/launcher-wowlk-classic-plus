@@ -52,9 +52,20 @@ function stripRoot(name, root) {
 }
 
 class InstallationManager {
-  /** @param {{ config: import('./ConfigurationManager.cjs').ConfigurationManager }} deps */
-  constructor({ config }) {
+  /** @param {{ config: import('./ConfigurationManager.cjs').ConfigurationManager, getDisplaySize?: () => { width: number, height: number } | null }} deps */
+  constructor({ config, getDisplaySize }) {
     this.config = config
+    this.getDisplaySize = getDisplaySize || null
+  }
+
+  #videoOptions(cfg) {
+    let displaySize = null
+    try { displaySize = this.getDisplaySize?.() || null } catch {}
+    return {
+      displaySize,
+      resolutionMode: cfg.graphics?.resolutionMode || 'auto',
+      customResolution: cfg.graphics?.customResolution || ''
+    }
   }
 
   statePath(id) { return path.join(this.config.clientDir(id), STATE_FILE) }
@@ -123,7 +134,7 @@ class InstallationManager {
     const statePath = path.join(r.dir, STATE_FILE)
     let state = null
     try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch { /* first adoption */ }
-    const realm = applyRealmlist(r.dir, cfg.realmlist, r.locale)
+    const realm = applyRealmlist(r.dir, cfg.realmlist, r.locale, undefined, undefined, this.#videoOptions(cfg))
     state = {
       client: id,
       architecture: this.config.client(id).architecture,
@@ -192,7 +203,7 @@ class InstallationManager {
       const missing = [...this.requiredFiles(id, locale || cfg.locale), client.executable].filter((rel) => !fs.existsSync(resolveInside(staging, rel)))
       if (missing.length) throw new LauncherError('INSTALL_INVALID', `The game package is incomplete. Missing: ${missing.join(', ')}`)
 
-      const realm = applyRealmlist(staging, cfg.realmlist, cfg.locale)
+      const realm = applyRealmlist(staging, cfg.realmlist, cfg.locale, undefined, undefined, this.#videoOptions(cfg))
 
       // Reinstall: keep the player's own data.
       if (fs.existsSync(finalDir)) {
@@ -237,7 +248,7 @@ class InstallationManager {
     const cfg = this.config.get()
     const dir = this.config.clientDir(id)
     const state = this.readState(id)
-    const r = applyRealmlist(dir, cfg.realmlist, state?.locale || cfg.locale, accountName, password)
+    const r = applyRealmlist(dir, cfg.realmlist, state?.locale || cfg.locale, accountName, password, this.#videoOptions(cfg))
     if (state && state.realmlist !== cfg.realmlist) this.writeState(id, { ...state, realmlist: cfg.realmlist })
     return r
   }
