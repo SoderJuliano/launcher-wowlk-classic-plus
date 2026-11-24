@@ -12,6 +12,7 @@
   },
   "realmlist": "ru2esxz6.free.tryportwarp.cc:16943",
   "locale": "enUS",
+  "gameLanguage": "enUS",
   "selectedClient": "wow32",
   "clients": {
     "wow32": {
@@ -54,5 +55,11 @@
   "wine": {
     "path": "",
     "prefix": ""
+  },
+  "graphics": {
+    "filtersEnabled": null,
+    "useDxvk": true,
+    "resolutionMode": "auto",
+    "customResolution": ""
   }
 }

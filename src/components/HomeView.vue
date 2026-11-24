@@ -95,7 +95,58 @@ async function installWine() {
     if (e.code !== 'CANCELLED') toast(`Falha ao instalar Wine: ${e.message}`)
   }
 }
+const checkingVulkan = ref(false)
+const showVulkanWarn = computed(() => {
+  const vk = snap.value?.vulkan
+  if (!vk || vk.supported) return false
+  return snap.value?.settings?.graphicsUseDxvk !== false
+})
+async function copyText(text, label = 'Comando copiado!') {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(label, 'info')
+  } catch {
+    toast('Não foi possível copiar automaticamente; selecione o comando manualmente.', 'info')
+  }
+}
+async function recheckVulkan() {
+  checkingVulkan.value = true
+  try {
+    const vk = await call('recheckVulkan')
+    toast(vk?.supported ? 'Drivers Vulkan detectados com sucesso!' : 'Drivers Vulkan 32-bit ainda não foram encontrados.', vk?.supported ? 'info' : 'error')
+  } catch (e) {
+    toast(e.message)
+  } finally {
+    checkingVulkan.value = false
+  }
+}
+async function openExternal(url) {
+  if (!url) return
+  try { await call('openExternal', url) } catch (e) { toast(e.message) }
+}
 const logout = () => run('logout').then(() => (store.skippedLogin = false))
+const switchingLang = ref(false)
+const gameLanguage = computed(() => snap.value?.settings?.gameLanguage || 'enUS')
+async function setLanguage(lang) {
+  if (switchingLang.value || busy.value || gameLanguage.value === lang || client.value?.running) return
+  switchingLang.value = true
+  try {
+    const res = await call('setGameLanguage', lang)
+    if (lang === 'ptBR') {
+      if (res?.missingVariant && !res?.pendingInstall) {
+        toast('Português (Brasil) salvo na conta. O pacote de tradução do cliente chegará na próxima atualização.', 'info')
+      } else {
+        toast('Idioma alterado para Português (Brasil)!', 'info')
+      }
+    } else {
+      toast('Game language set to English.', 'info')
+    }
+  } catch (e) {
+    if (e.code !== 'CANCELLED') toast(e.message)
+  } finally {
+    switchingLang.value = false
+  }
+}
 const togglingSupporter = ref(false)
 const supporterContentOn = computed(() => !!(client.value?.supporterContentEnabled && snap.value?.supporter?.supporter))
 async function toggleSupporterContent() {
@@ -147,7 +198,25 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
     <section class="stage">
       <header class="stage__top">
         <ApiStatus />
-        <div class="who">
+        <div class="top-right">
+          <div class="lang-switch" :class="{ 'is-busy': switchingLang }" title="Idioma do jogo / Game language">
+            <Icon name="globe" :size="13" />
+            <button
+              type="button"
+              class="lang-switch__btn"
+              :class="{ 'is-on': gameLanguage === 'enUS' }"
+              :disabled="busy || switchingLang || client.running"
+              @click="setLanguage('enUS')"
+            >EN</button>
+            <button
+              type="button"
+              class="lang-switch__btn"
+              :class="{ 'is-on': gameLanguage === 'ptBR' }"
+              :disabled="busy || switchingLang || client.running"
+              @click="setLanguage('ptBR')"
+            >PT-BR</button>
+          </div>
+          <div class="who">
           <template v-if="snap.user">
             <span class="who__user" :class="{ 'is-supporter': snap.supporter?.supporter }">
               <Icon name="user" /> {{ snap.user.username }}
@@ -158,6 +227,7 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
             <button type="button" class="btn btn--ghost btn--icon" title="Log out" aria-label="Log out" @click="logout"><Icon name="logout" /></button>
           </template>
           <button v-else type="button" class="btn btn--ghost" @click="store.skippedLogin = false"><Icon name="lock" /> Sign in</button>
+          </div>
         </div>
       </header>
 
@@ -186,6 +256,49 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
             <span class="sup-toggle__thumb" />
           </span>
         </button>
+        <div v-if="snap.launcherUpdateError" class="alert alert--warn hero__warn wine-alert">
+          <Icon name="alert" :size="16" />
+          <div class="wine-alert__content">
+            <p><strong>Atualização do Launcher (v{{ snap.launcherUpdateError.version }}):</strong> {{ snap.launcherUpdateError.message }}</p>
+            <div class="warn-actions">
+              <button v-if="snap.launcherUpdateError.manualUrl" type="button" class="btn btn--wine" @click="openExternal(snap.launcherUpdateError.manualUrl)">
+                <Icon name="download" :size="14" /> Baixar nova versão
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-if="showVulkanWarn" class="alert alert--warn hero__warn wine-alert">
+          <Icon name="alert" :size="16" />
+          <div class="wine-alert__content">
+            <p>
+              <strong>Drivers Vulkan ausentes<template v-if="snap.vulkan.distro?.prettyName"> ({{ snap.vulkan.distro.prettyName }})</template>:</strong>
+              {{ snap.vulkan.missingReasons?.[0] || 'Drivers Vulkan são necessários para rodar o cliente com DXVK e filtros gráficos (F11).' }}
+            </p>
+            <div v-if="snap.vulkan.installCommand" class="cmd-box">
+              <code>{{ snap.vulkan.installCommand }}</code>
+              <button type="button" class="btn btn--wine btn--xs" @click="copyText(snap.vulkan.installCommand, 'Comando copiado para a área de transferência!')">Copiar</button>
+            </div>
+            <p v-if="snap.vulkan.multilibHint" class="warn-hint">
+              Dica Arch/Archcraft: se algum pacote <code>lib32-*</code> não for encontrado, habilite <code>[multilib]</code> em <code>/etc/pacman.conf</code> e rode <code>sudo pacman -Sy</code>.
+            </p>
+            <div class="warn-actions">
+              <template v-if="snap.vulkan.driverLinks?.length">
+                <button v-for="lnk in snap.vulkan.driverLinks" :key="lnk.url" type="button" class="btn btn--wine" @click="openExternal(lnk.url)">
+                  <Icon name="globe" :size="13" /> {{ lnk.label }}
+                </button>
+              </template>
+              <button v-else-if="snap.vulkan.docsUrl" type="button" class="btn btn--wine" @click="openExternal(snap.vulkan.docsUrl)">
+                <Icon name="globe" :size="13" /> Guia Vulkan
+              </button>
+              <button type="button" class="btn btn--ghost btn--xs" :disabled="checkingVulkan" @click="recheckVulkan">
+                <Icon name="refresh" :size="13" /> {{ checkingVulkan ? 'Verificando…' : 'Verificar novamente' }}
+              </button>
+              <button type="button" class="btn btn--ghost btn--xs" @click="settingsOpen = true">
+                Usar DirectX 9 (fallback)
+              </button>
+            </div>
+          </div>
+        </div>
         <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
           <div class="wine-alert__content">
@@ -276,7 +389,26 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .lnk:hover { background: rgba(127, 203, 255, .06); color: var(--text-100); }
 
 .stage { position: relative; display: grid; grid-template-rows: auto 1fr auto; padding: 18px 28px 22px; min-width: 0; min-height: 0; overflow: hidden; }
-.stage__top { display: flex; justify-content: space-between; align-items: center; }
+.stage__top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.top-right { display: flex; align-items: center; gap: 12px; }
+.lang-switch {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 4px 3px 8px;
+  border-radius: 999px; border: 1px solid var(--line); background: rgba(3, 6, 10, .65);
+  color: var(--text-300);
+}
+.lang-switch.is-busy { opacity: .65; }
+.lang-switch__btn {
+  border: 0; border-radius: 999px; padding: 4px 8px; cursor: pointer;
+  background: transparent; color: var(--text-300);
+  font: 700 .66rem/1 var(--font-body); letter-spacing: .06em;
+  transition: background .18s, color .18s;
+}
+.lang-switch__btn:hover:not(:disabled):not(.is-on) { color: var(--text-100); background: rgba(255, 255, 255, .06); }
+.lang-switch__btn.is-on {
+  background: linear-gradient(135deg, var(--gold-200), var(--gold-400));
+  color: #1a1005;
+}
+.lang-switch__btn:disabled { cursor: default; opacity: .6; }
 .who { display: flex; align-items: center; gap: 8px; font: 600 .86rem var(--font-display); color: var(--text-100); letter-spacing: .06em; }
 .who__user { display: inline-flex; align-items: center; gap: 8px; }
 .who__user.is-supporter { color: var(--gold-100); }
@@ -302,6 +434,11 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .wine-alert__content p { margin: 0; font-size: .82rem; line-height: 1.4; }
 .btn--wine { align-self: flex-start; height: 32px; padding: 0 14px; font-size: .72rem; background: var(--gold-400); color: #1a1005; font-weight: 700; border-radius: 4px; border: 1px solid var(--gold-200); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .btn--wine:hover:not(:disabled) { filter: brightness(1.15); }
+.btn--xs { height: 28px; padding: 0 10px; font-size: .7rem; }
+.cmd-box { display: flex; align-items: center; gap: 8px; background: rgba(0, 0, 0, .45); border: 1px solid rgba(240, 192, 64, .25); border-radius: 4px; padding: 6px 8px; }
+.cmd-box code { flex: 1; font-size: .72rem; word-break: break-all; user-select: all; color: var(--gold-200); }
+.warn-hint { font-size: .74rem !important; opacity: .88; }
+.warn-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
 @media (max-height: 720px) {
   .stage { padding: 10px 20px 12px; }

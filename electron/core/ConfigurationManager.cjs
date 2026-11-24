@@ -18,7 +18,7 @@ function deepMerge(base, over) {
 }
 
 /** Only these keys can be changed from the UI (the rest is factory/manifest data). */
-const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'selectedClient', 'clients.wow32.supporterContentEnabled', 'clients.wow64.supporterContentEnabled', 'installDir', 'wine.path', 'wine.prefix', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
+const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'gameLanguage', 'selectedClient', 'clients.wow32.supporterContentEnabled', 'clients.wow64.supporterContentEnabled', 'installDir', 'wine.path', 'wine.prefix', 'graphics.filtersEnabled', 'graphics.useDxvk', 'graphics.resolutionMode', 'graphics.customResolution', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
 
 class ConfigurationManager {
   /**
@@ -81,11 +81,14 @@ class ConfigurationManager {
       throw new LauncherError('CONFIG_INVALID', 'Realmlist must be host or host:port')
     }
     if (key === 'locale' && !/^[a-z]{2}[A-Z]{2}$/.test(value)) throw new LauncherError('CONFIG_INVALID', 'Locale must look like enUS')
+    if (key === 'gameLanguage' && !['enUS', 'ptBR'].includes(value)) throw new LauncherError('CONFIG_INVALID', 'Game language must be enUS or ptBR')
     if (key === 'selectedClient') this.client(value)
     if ((key === 'installDir' || key.startsWith('wine.') || /^clients\.[a-z0-9]+\.path$/.test(key)) && (typeof value !== 'string' || !path.isAbsolute(value))) {
       throw new LauncherError('CONFIG_INVALID', `${key} must be an absolute path`)
     }
-    if ((key === 'api.discovery.enabled' || key.endsWith('.supporterContentEnabled')) && typeof value !== 'boolean') throw new LauncherError('CONFIG_INVALID', `${key} must be true/false`)
+    if ((key === 'api.discovery.enabled' || key.endsWith('.supporterContentEnabled') || key === 'graphics.filtersEnabled' || key === 'graphics.useDxvk') && typeof value !== 'boolean') throw new LauncherError('CONFIG_INVALID', `${key} must be true/false`)
+    if (key === 'graphics.resolutionMode' && !['auto', 'manual', 'custom'].includes(value)) throw new LauncherError('CONFIG_INVALID', 'Resolution mode must be auto, manual or custom')
+    if (key === 'graphics.customResolution' && !/^\d{3,4}x\d{3,4}$/.test(String(value))) throw new LauncherError('CONFIG_INVALID', 'Custom resolution must look like 1920x1080')
   }
 }
 

@@ -25,6 +25,7 @@ const { DownloadManager } = require('./core/DownloadManager.cjs')
 const { InstallationManager } = require('./core/InstallationManager.cjs')
 const { UpdateManager } = require('./core/UpdateManager.cjs')
 const { SupporterContentManager } = require('./core/SupporterContentManager.cjs')
+const { LanguagePackManager } = require('./core/LanguagePackManager.cjs')
 const { GameLauncher } = require('./core/GameLauncher.cjs')
 const { LauncherSelfUpdater } = require('./core/LauncherSelfUpdater.cjs')
 const { LauncherController } = require('./core/LauncherController.cjs')
@@ -42,6 +43,20 @@ let win = null
 let controller = null
 let gameLauncher = null
 
+function getPrimaryDisplaySize() {
+  try {
+    const primary = screen.getPrimaryDisplay()
+    if (!primary?.size?.width || !primary?.size?.height) return null
+    const scale = Number(primary.scaleFactor) > 0 ? Number(primary.scaleFactor) : 1
+    return {
+      width: Math.round(primary.size.width * scale),
+      height: Math.round(primary.size.height * scale)
+    }
+  } catch {
+    return null
+  }
+}
+
 function createServices() {
   const dataDir = app.getPath('userData')
   log.init(path.join(dataDir, 'logs'))
@@ -51,14 +66,15 @@ function createServices() {
   const auth = new AuthenticationService({ api, dataDir, secureStore: safeStorage, platform: process.platform, launcherVersion: VERSION })
   const manifests = new ManifestService({ api, auth, launcherVersion: VERSION, config })
   const downloader = new DownloadManager()
-  const installer = new InstallationManager({ config })
+  const installer = new InstallationManager({ config, getDisplaySize: getPrimaryDisplaySize })
   const updater = new UpdateManager({ config, installer, downloader })
   const supporterContent = new SupporterContentManager({ config, downloader })
+  const languagePack = new LanguagePackManager({ config, downloader })
   const game = new GameLauncher({ config, installer })
   gameLauncher = game
   const selfUpdater = new LauncherSelfUpdater({ config, api, manifests, downloader, launcherVersion: VERSION })
   controller = new LauncherController({
-    config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater,
+    config, api, auth, manifests, downloader, installer, updater, supporterContent, languagePack, game, selfUpdater,
     emit: (channel, payload) => {
       if (win && !win.isDestroyed()) {
         try { win.webContents.send(`olk:${channel}`, payload) } catch {}
@@ -174,6 +190,7 @@ function registerIpc() {
   handle('checkApi', () => controller.checkApi())
   handle('selectClient', (id) => controller.updateSettings({ selectedClient: String(id) }))
   handle('setSupporterContent', (id, enabled) => controller.setSupporterContentEnabled(String(id), !!enabled))
+  handle('setGameLanguage', (lang) => controller.setGameLanguage(String(lang)))
   handle('install', (id) => controller.install(String(id)))
   handle('update', (id) => controller.update(String(id)))
   handle('repair', (id) => controller.update(String(id), { repair: true }))
@@ -193,9 +210,15 @@ function registerIpc() {
   })
   handle('installWine', () => controller.installWine())
   handle('detectWineCandidates', () => controller.detectWineCandidates())
+  handle('recheckVulkan', () => controller.recheckVulkan())
   handle('resetWinePrefix', () => controller.resetWinePrefix())
   handle('clearError', (id) => controller.clearError(String(id)))
   handle('saveSettings', (patch) => controller.updateSettings(patch))
+  handle('openExternal', (url) => {
+    const clean = String(url || '').trim()
+    assertSafeUrl(clean, { allowHttpLocalhost: false })
+    return shell.openExternal(clean)
+  })
   handle('openGameFolder', async (id) => {
     const dir = controller.config.clientDir(String(id))
     const err = await shell.openPath(require('node:fs').existsSync(dir) ? dir : controller.config.get().installDir)

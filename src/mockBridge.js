@@ -16,6 +16,8 @@ export function installMockBridge() {
   const snap = {
     platform: { platform: 'win32', arch: 'x64', label: 'Windows' },
     wine: { needed: false, found: true },
+    vulkan: { platform: 'win32', supported: true, missingReasons: [], installCommand: null, docsUrl: 'https://vulkan.lunarg.com/sdk/home', driverLinks: [] },
+    launcherUpdateError: null,
     api: view === 'login' ? { state: 'incompatible', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', error: 'Server is online but the launcher API (/launcher/v1) is not available yet.' } : { state: 'online', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', apiVersion: 1 },
     user: view === 'login' ? null : { id: 7, username: 'ARTHAS' },
     supporter: view === 'login' ? null : { supporter: true, since: '2026-11-22T16:59:41Z', donations: 1 },
@@ -29,7 +31,7 @@ export function installMockBridge() {
       client('wow64')
     ],
     task: view === 'installing' ? { id: 'wow32', kind: 'install', stage: 'download' } : null,
-    settings: { wow32ManifestUrl: '', apiBaseUrl: '', discoveryEnabled: true, realmlist: 'ru2esxz6.free.tryportwarp.cc:16943', locale: 'enUS', installDir: 'C:\\Users\\player\\AppData\\Roaming\\OLK Plus Launcher\\games', winePath: '', winePrefix: '', websiteUrl: 'https://example.com', wow32PackageUrl: 'https://drive.google.com/file/d/xxxx/view', wow64PackageUrl: '' },
+    settings: { wow32ManifestUrl: '', apiBaseUrl: '', discoveryEnabled: true, realmlist: 'ru2esxz6.free.tryportwarp.cc:16943', locale: 'enUS', gameLanguage: 'enUS', installDir: 'C:\\Users\\player\\AppData\\Roaming\\OLK Plus Launcher\\games', winePath: '', winePrefix: '', graphicsFiltersEnabled: true, graphicsUseDxvk: true, graphicsResolutionMode: 'auto', graphicsCustomResolution: '', websiteUrl: 'https://example.com', wow32PackageUrl: 'https://drive.google.com/file/d/xxxx/view', wow64PackageUrl: '' },
     logFile: 'C:\\…\\launcher.log'
   }
   const ok = (data) => Promise.resolve({ ok: true, data })

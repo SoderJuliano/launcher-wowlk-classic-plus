@@ -138,6 +138,22 @@ class ManifestService {
     }
   }
 
+  /**
+   * Fetches the public language pack manifest for a client/language (e.g. wow32 / ptBR).
+   * Returns null if not published yet (404).
+   */
+  async fetchLanguageManifest(clientId, lang) {
+    if (!lang || lang === 'enUS') return null
+    try {
+      const raw = await this.api.request('GET', `/manifest/${encodeURIComponent(clientId)}/lang/${encodeURIComponent(lang)}`)
+      if (!raw) return null
+      return validateLanguageManifest(raw, clientId, lang)
+    } catch (err) {
+      if (err.status === 404 || err.code === 'HTTP_404' || err.code === 'NOT_FOUND') return null
+      throw err
+    }
+  }
+
   async #fetchStatic(url) {
     assertSafeUrl(url)
     const ctrl = new AbortController()
@@ -153,4 +169,43 @@ class ManifestService {
   }
 }
 
-module.exports = { ManifestService, validateManifest, cmpVersion }
+function validateLanguageManifest(m, expectedClient, expectedLang) {
+  if (!m || typeof m !== 'object') fail('language manifest not an object')
+  if (m.schema_version !== 1) fail(`unsupported language schema_version ${m.schema_version}`)
+  if (m.client !== expectedClient) fail(`language manifest client is "${m.client}", expected "${expectedClient}"`)
+  if (m.language !== expectedLang) fail(`language manifest language is "${m.language}", expected "${expectedLang}"`)
+  if (!SEMVER.test(m.version || '')) fail('language manifest version must be semver (x.y.z)')
+  const variants = {}
+  if (m.variants && typeof m.variants === 'object' && !Array.isArray(m.variants)) {
+    for (const [baseSha, entry] of Object.entries(m.variants)) {
+      if (!isSha256(baseSha)) fail(`variants key ${baseSha} is not a valid sha256`)
+      if (!entry || typeof entry !== 'object') fail(`variants[${baseSha}]`)
+      const p = normalizeRelative(entry.path)
+      if (/^\.olk/i.test(p)) fail(`${p} is a reserved launcher path`)
+      if (!Number.isSafeInteger(entry.size) || entry.size < 0) fail(`variants[${baseSha}].size`)
+      if (!isSha256(entry.sha256)) fail(`variants[${baseSha}].sha256`)
+      assertSafeUrl(entry.url)
+      variants[baseSha.toLowerCase()] = { path: p, size: entry.size, sha256: entry.sha256.toLowerCase(), url: entry.url }
+    }
+  }
+  const files = (m.files ?? []).map((f, i) => {
+    if (!f || typeof f !== 'object') fail(`language files[${i}]`)
+    const p = normalizeRelative(f.path)
+    if (/^\.olk/i.test(p)) fail(`${p} is a reserved launcher path`)
+    if (!Number.isSafeInteger(f.size) || f.size < 0) fail(`language files[${i}].size`)
+    if (!isSha256(f.sha256)) fail(`language files[${i}].sha256`)
+    assertSafeUrl(f.url)
+    return { path: p, size: f.size, sha256: f.sha256.toLowerCase(), url: f.url }
+  })
+  return {
+    schema_version: 1,
+    client: m.client,
+    language: m.language,
+    version: m.version,
+    target_path: m.target_path ? normalizeRelative(m.target_path) : 'Data/patch-Z.MPQ',
+    variants,
+    files
+  }
+}
+
+module.exports = { ManifestService, validateManifest, validateLanguageManifest, cmpVersion }

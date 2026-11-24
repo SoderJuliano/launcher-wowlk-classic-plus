@@ -11,21 +11,25 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { LauncherError, toPlain } = require('./errors.cjs')
 const platform = require('./PlatformService.cjs')
+const { shouldEnableFilters } = require('./GraphicsManager.cjs')
 const log = require('./logger.cjs')
 
 class LauncherController {
-  constructor({ config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater, emit }) {
-    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, supporterContent, game, selfUpdater })
+  constructor({ config, api, auth, manifests, downloader, installer, updater, supporterContent, languagePack, game, selfUpdater, emit }) {
+    Object.assign(this, { config, api, auth, manifests, downloader, installer, updater, supporterContent, languagePack, game, selfUpdater })
     this.emit = emit || (() => {})
     this.task = null // { id, kind, phase, done, total, file, bytesPerSec, controller }
     this.launcherUpdate = null
+    this.launcherUpdateError = null
     this.lastError = {} // clientId -> { code, message }
     this.manifestCache = {} // clientId -> { manifest, fetchedAt } | { error }
     this.supporterManifestCache = {} // clientId -> { manifest, fetchedAt }
+    this.languageManifestCache = {} // `${clientId}:${lang}` -> { manifest, fetchedAt }
     this.supporter = null // { supporter: boolean, since: string | null, donations: number } | null
     this.supporterCheckedAt = 0
     this.initialized = false
     this.wine = null
+    this.vulkan = null
     this.periodicTimer = null
   }
 
@@ -45,6 +49,7 @@ class LauncherController {
     if (this.wine?.found && this.wine?.path && !this.config.get().wine?.path && !this.wine.isProton) {
       try { this.config.update({ 'wine.path': this.wine.path }) } catch {}
     }
+    this.vulkan = platform.detectVulkan()
     await this.api.health()
     if (this.api.lastStatus.state === 'online') {
       try {
@@ -55,8 +60,20 @@ class LauncherController {
           }
         })
         if (updateResult?.relaunching) return
+        if (updateResult?.error) {
+          this.launcherUpdateError = {
+            version: updateResult.version || null,
+            message: updateResult.error,
+            manualUrl: updateResult.manualUrl || null
+          }
+        } else {
+          this.launcherUpdateError = null
+        }
       } catch (err) {
         log.warn('launcher self-update check failed', toPlain(err))
+        if (this.selfUpdater?.lastError) {
+          this.launcherUpdateError = this.selfUpdater.lastError
+        }
       } finally {
         this.launcherUpdate = null
         this.#publish()
@@ -134,6 +151,7 @@ class LauncherController {
     return {
       platform: platform.describe(),
       wine: this.wine,
+      vulkan: this.vulkan,
       api: this.api.lastStatus,
       user: this.auth.user,
       supporter: this.supporter,
@@ -141,6 +159,7 @@ class LauncherController {
       hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
       launcherUpdate: this.launcherUpdate,
+      launcherUpdateError: this.launcherUpdateError,
       clients: Object.keys(cfg.clients).map((id) => this.clientState(id)),
       task: this.task && { id: this.task.id, kind: this.task.kind, stage: this.task.stage, phase: this.task.phase, done: this.task.done, total: this.task.total, file: this.task.file, bytesPerSec: this.task.bytesPerSec },
       settings: {
@@ -148,9 +167,14 @@ class LauncherController {
         discoveryEnabled: cfg.api.discovery.enabled,
         realmlist: cfg.realmlist,
         locale: cfg.locale,
+        gameLanguage: cfg.gameLanguage || 'enUS',
         installDir: cfg.installDir,
         winePath: cfg.wine.path,
         winePrefix: cfg.wine.prefix,
+        graphicsFiltersEnabled: shouldEnableFilters(cfg.graphics || {}),
+        graphicsUseDxvk: cfg.graphics?.useDxvk !== false,
+        graphicsResolutionMode: cfg.graphics?.resolutionMode || 'auto',
+        graphicsCustomResolution: cfg.graphics?.customResolution || '',
         websiteUrl: cfg.websiteUrl,
         wow32PackageUrl: cfg.clients.wow32?.basePackage?.url || '',
         wow32ManifestUrl: cfg.clients.wow32?.manifestUrl || '',
@@ -302,10 +326,94 @@ class LauncherController {
       }
     } else {
       this.config.update({ [key]: false })
+      try { this.languagePack?.deactivate(clientId) } catch (err) { log.warn(`deactivate language ${clientId} failed`, err.message) }
       try { this.supporterContent?.deactivate(clientId) } catch (err) { log.warn(`deactivate supporter ${clientId} failed`, err.message) }
       this.#publish()
     }
     return this.snapshot()
+  }
+
+  async syncAccountLanguage(lang) {
+    if (!this.auth.isAuthenticated() && !this.auth.session) return false
+    if (this.api.lastStatus?.state !== 'online') return false
+    try {
+      const token = await this.auth.accessToken()
+      await this.api.request('PUT', '/account/language', { token, body: { language: lang } })
+      return true
+    } catch (err) {
+      log.warn(`account language sync (${lang}) failed`, toPlain(err))
+      return false
+    }
+  }
+
+  async refreshLanguageManifest(clientId, lang) {
+    if (!lang || lang === 'enUS' || !this.manifests?.fetchLanguageManifest) return null
+    if (this.api.lastStatus?.state !== 'online') return this.languageManifestCache[`${clientId}:${lang}`]?.manifest || null
+    try {
+      const m = await this.manifests.fetchLanguageManifest(clientId, lang)
+      if (m) this.languageManifestCache[`${clientId}:${lang}`] = { manifest: m, fetchedAt: Date.now() }
+      else delete this.languageManifestCache[`${clientId}:${lang}`]
+      return m
+    } catch (err) {
+      log.warn(`language manifest ${clientId}/${lang} unavailable`, toPlain(err))
+      return null
+    }
+  }
+
+  /**
+   * Switches the game language ('enUS' | 'ptBR'), syncs preference to the server,
+   * and immediately downloads/applies (or reverts) the language pack for the selected installed client.
+   */
+  async setGameLanguage(lang) {
+    if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
+    const cfg = this.config.get()
+    for (const id of Object.keys(cfg.clients)) {
+      if (this.game.isRunning(id)) {
+        throw new LauncherError('ALREADY_RUNNING', 'Close the game before changing the game language.')
+      }
+    }
+    this.config.update({ gameLanguage: lang })
+    const serverSynced = await this.syncAccountLanguage(lang)
+    const selectedId = this.config.get().selectedClient || 'wow32'
+
+    if (lang === 'enUS') {
+      for (const id of Object.keys(cfg.clients)) {
+        try { this.languagePack?.deactivate(id) } catch (err) { log.warn(`deactivate language ${id} failed`, err.message) }
+      }
+      this.#publish()
+      return { language: lang, applied: 0, serverSynced }
+    }
+
+    const st = this.clientState(selectedId)
+    if (!st.installed || !this.languagePack) {
+      this.#publish()
+      return { language: lang, applied: 0, serverSynced, pendingInstall: !st.installed }
+    }
+
+    const supporterOn = !!(this.config.client(selectedId).supporterContentEnabled && this.supporter?.supporter)
+    if (supporterOn && !this.supporterContent?.isActive(selectedId)) {
+      try { this.languagePack.deactivate(selectedId) } catch {}
+      try { this.supporterContent?.activate(selectedId) } catch {}
+    } else if (!supporterOn && this.supporterContent?.isActive(selectedId)) {
+      try { this.languagePack.deactivate(selectedId) } catch {}
+      try { this.supporterContent?.deactivate(selectedId) } catch {}
+    }
+
+    let result = { applied: 0, missingVariant: true }
+    await this.#run(selectedId, 'update', async (signal) => {
+      const lm = await this.refreshLanguageManifest(selectedId, lang)
+      if (!lm) return
+      if (this.task) this.task.stage = 'verify'
+      await this.languagePack.sync(selectedId, lm, {
+        signal,
+        onProgress: (p) => {
+          if (this.task) this.task.stage = p.phase === 'downloading' ? 'update' : 'verify'
+          this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
+        }
+      })
+      result = await this.languagePack.activate(selectedId, lm, { signal })
+    })
+    return { language: lang, serverSynced, ...result }
   }
 
   /** Downloads/updates the supporter overlay cache for a client inside .olk-supporter/files/. */
@@ -402,7 +510,14 @@ class LauncherController {
       })
       fs.promises.rm(zip, { force: true }).catch(() => {})
 
-      if (m) await this.#update(id, m, signal)
+      let latestManifest = m
+      if (!latestManifest) {
+        try {
+          await this.refreshManifests()
+          latestManifest = this.manifestCache[id]?.manifest
+        } catch {}
+      }
+      if (latestManifest) await this.#update(id, latestManifest, signal)
       return this.clientState(id)
     })
   }
@@ -410,17 +525,28 @@ class LauncherController {
   /** Incremental update (or repair: same thing, it re-checks every listed file). */
   update(id, { repair = false } = {}) {
     return this.#run(id, repair ? 'repair' : 'update', async (signal) => {
-      // Always deactivate supporter overlay before touching base client files so UpdateManager sees a clean base.
+      // Fixed order: undo language -> undo supporter -> official update -> sync supporter -> sync language.
+      this.languagePack?.deactivate(id)
       this.supporterContent?.deactivate(id)
       const m = this.manifestCache[id]?.manifest ?? (await this.manifests.fetch(id))
       this.manifestCache[id] = { manifest: m, fetchedAt: Date.now() }
       await this.#update(id, m, signal, { ignoreCache: repair })
       this.installer.ensureRealmlist(id)
-      if (this.config.client(id).supporterContentEnabled && this.supporter?.supporter && this.supporterContent) {
+      const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter && this.supporterContent)
+      if (supporterOn) {
         const sm = this.supporterManifestCache[id]?.manifest ?? (await this.manifests.fetchSupporterManifest(id))
         if (sm) {
           this.supporterManifestCache[id] = { manifest: sm, fetchedAt: Date.now() }
           await this.supporterContent.sync(id, sm, { signal, onProgress: this.#progress('update') })
+        }
+      }
+      const lang = this.config.get().gameLanguage || 'enUS'
+      if (lang !== 'enUS' && this.languagePack) {
+        if (supporterOn) this.supporterContent.activate(id)
+        const lm = await this.refreshLanguageManifest(id, lang)
+        if (lm) {
+          await this.languagePack.sync(id, lm, { signal, onProgress: this.#progress('update') })
+          await this.languagePack.activate(id, lm, { signal })
         }
       }
       return this.clientState(id)
@@ -453,9 +579,37 @@ class LauncherController {
       await this.installWine()
     }
     try {
+      const lang = this.config.get().gameLanguage || 'enUS'
+      const supporterCurrentlyActive = this.supporterContent?.isActive(id) || false
+      // If supporter state changed or we are switching back to English, revert language overlay first.
+      if (lang === 'enUS' || supporterOn !== supporterCurrentlyActive) {
+        this.languagePack?.deactivate(id)
+      }
       // Apply or revert supporter overlay cleanly right before launching the game.
       if (supporterOn) this.supporterContent?.activate(id)
       else this.supporterContent?.deactivate(id)
+
+      if (lang !== 'enUS' && this.languagePack) {
+        const lm = this.languageManifestCache[`${id}:${lang}`]?.manifest ?? (await this.refreshLanguageManifest(id, lang))
+        if (lm) {
+          const activeLang = this.languagePack.readActive(id)
+          const { baseSha, variant } = await this.languagePack.resolveVariant(id, lm)
+          if (variant && (!activeLang || activeLang.language !== lang || activeLang.version !== lm.version || activeLang.baseSha256 !== baseSha)) {
+            await this.#run(id, 'update', async (signal) => {
+              await this.languagePack.sync(id, lm, {
+                signal,
+                onProgress: (p) => {
+                  if (this.task) this.task.stage = p.phase === 'downloading' ? 'update' : 'verify'
+                  this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
+                }
+              })
+            })
+          }
+          await this.languagePack.activate(id, lm)
+        }
+      }
+      await this.syncAccountLanguage(lang)
+
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
       const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials })
       this.#publish()
@@ -577,8 +731,16 @@ class LauncherController {
           }
         })
         if (updateResult?.relaunching) return
+        if (updateResult?.error) {
+          this.launcherUpdateError = {
+            version: updateResult.version || null,
+            message: updateResult.error,
+            manualUrl: updateResult.manualUrl || null
+          }
+        }
       } catch (err) {
         log.warn('periodic launcher update check failed', toPlain(err))
+        if (this.selfUpdater?.lastError) this.launcherUpdateError = this.selfUpdater.lastError
       } finally {
         if (this.launcherUpdate) {
           this.launcherUpdate = null
@@ -620,14 +782,22 @@ class LauncherController {
       await this.api.health()
     }
     if (patch['wine.path'] !== undefined) this.wine = await platform.detectWine(after.wine.path, platform.platform, [this.internalWinePath()])
-    // Push a new realmlist into installed clients right away.
-    if (patch.realmlist) for (const id of Object.keys(after.clients)) if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id)
+    // Push a new realmlist or video setting into installed clients right away.
+    if (patch.realmlist || patch['graphics.resolutionMode'] !== undefined || patch['graphics.customResolution'] !== undefined) {
+      for (const id of Object.keys(after.clients)) if (this.installer.verify(id).installed) this.installer.ensureRealmlist(id)
+    }
     this.#publish()
     return this.snapshot()
   }
 
   async detectWineCandidates() {
     return platform.detectAllWineCandidates(this.config.get().wine?.path, [this.internalWinePath()])
+  }
+
+  recheckVulkan() {
+    this.vulkan = platform.detectVulkan()
+    this.#publish()
+    return this.vulkan
   }
 
   async resetWinePrefix() {
