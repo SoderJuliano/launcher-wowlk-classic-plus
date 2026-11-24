@@ -124,4 +124,75 @@ describe('LanguagePackManager & gameLanguage config', () => {
     assert.equal(a.missingVariant, true)
     assert.equal(sha(fs.readFileSync(patchZ)), sha(unknownBase))
   })
+
+  it('re-applies language pack when active Data/patch-Z.MPQ was overwritten on disk', async () => {
+    const { config, gameDir } = makeEnv()
+    const baseBytes = Buffer.from('BASE-PATCH-Z-ENUS-CONTENT')
+    const ptBytes = Buffer.from('VARIANT-PATCH-Z-PTBR-CONTENT')
+    const patchZ = path.join(gameDir, 'Data', 'patch-Z.MPQ')
+    fs.writeFileSync(patchZ, baseBytes)
+
+    const downloader = { async download({ dest }) { fs.writeFileSync(dest, ptBytes) } }
+    const manifest = validateLanguageManifest({
+      schema_version: 1,
+      client: 'wow32',
+      language: 'ptBR',
+      version: '1.0.1',
+      variants: {
+        [sha(baseBytes)]: {
+          path: 'Data/patch-Z.MPQ',
+          size: ptBytes.length,
+          sha256: sha(ptBytes),
+          url: 'https://cdn.example.com/lang/wow32/ptBR/v1.0.1/patch-Z.ptBR.MPQ'
+        }
+      },
+      files: []
+    }, 'wow32', 'ptBR')
+
+    const mgr = new LanguagePackManager({ config, downloader })
+    await mgr.sync('wow32', manifest)
+    await mgr.activate('wow32', manifest)
+    assert.equal(sha(fs.readFileSync(patchZ)), sha(ptBytes))
+
+    // Simulate external overwrite of Data/patch-Z.MPQ back to base while active.json still exists
+    fs.writeFileSync(patchZ, baseBytes)
+    const reactivated = await mgr.activate('wow32', manifest)
+    assert.equal(reactivated.alreadyActive, undefined)
+    assert.equal(reactivated.applied, 1)
+    assert.equal(sha(fs.readFileSync(patchZ)), sha(ptBytes))
+  })
+
+  it('LauncherController.play() verifies live manifests before launch and blocks outdated launcher', async () => {
+    const { LauncherController } = require('../electron/core/LauncherController.cjs')
+    const { LauncherError } = require('../electron/core/errors.cjs')
+    const { config } = makeEnv()
+
+    let launchCalled = false
+    let updateCalled = false
+    let mode = 'newer'
+    const ctrl = new LauncherController({
+      config,
+      api: { lastStatus: { state: 'online' }, request: async () => ({}) },
+      auth: { isAuthenticated: () => false, user: null, password: null },
+      manifests: {
+        fetch: async () => {
+          if (mode === 'outdated') throw new LauncherError('LAUNCHER_OUTDATED', 'Launcher too old')
+          return { version: '1.0.59', files: [], deleted_files: [] }
+        }
+      },
+      installer: { verify: () => ({ installed: true, state: { version: '1.0.58' }, missing: [] }) },
+      game: { isRunning: () => false, launch: async () => { launchCalled = true; return { pid: 1 } } }
+    })
+    ctrl.update = async (id) => { updateCalled = true; return id }
+
+    // 1. Live manifest reports newer client version -> triggers update before play
+    await ctrl.play('wow32')
+    assert.equal(updateCalled, true)
+    assert.equal(launchCalled, false)
+
+    // 2. Live manifest reports LAUNCHER_OUTDATED -> refuses to launch
+    mode = 'outdated'
+    await assert.rejects(() => ctrl.play('wow32'), { code: 'LAUNCHER_OUTDATED' })
+    assert.equal(launchCalled, false)
+  })
 })

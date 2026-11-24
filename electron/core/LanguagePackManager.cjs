@@ -146,10 +146,20 @@ class LanguagePackManager {
     // Determine what the underlying base SHA-256 is before activating
     const { baseSha, variant } = await this.resolveVariant(clientId, manifest, { signal })
     if (active) {
+      let hashMatches = true
+      if (variant) {
+        try {
+          const target = resolveInside(p.gameDir, variant.path)
+          hashMatches = fs.existsSync(target) && (await sha256File(target, { signal })) === variant.sha256
+        } catch {
+          hashMatches = false
+        }
+      }
       if (
         active.language === manifest.language &&
         active.version === manifest.version &&
         active.baseSha256 === baseSha &&
+        hashMatches &&
         this.#allActivePresent(p.gameDir, active.entries)
       ) {
         return { applied: active.entries.length, alreadyActive: true, missingVariant: !variant }

@@ -64,7 +64,13 @@ const eta = computed(() => {
 })
 
 async function run(action, ...args) {
-  try { await call(action, ...args) } catch (e) { if (e.code !== 'CANCELLED') toast(e.message) }
+  try {
+    const res = await call(action, ...args)
+    if (action === 'play' && res?.languageWarning?.message) {
+      toast(res.languageWarning.message, 'error')
+    }
+    return res
+  } catch (e) { if (e.code !== 'CANCELLED') toast(e.message) }
 }
 let lastMainTime = 0
 function main(e) {

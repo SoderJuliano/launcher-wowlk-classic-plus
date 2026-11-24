@@ -22,6 +22,7 @@ class LauncherController {
     this.launcherUpdate = null
     this.launcherUpdateError = null
     this.lastError = {} // clientId -> { code, message }
+    this.languageWarning = {} // clientId -> { language, baseSha, message }
     this.manifestCache = {} // clientId -> { manifest, fetchedAt } | { error }
     this.supporterManifestCache = {} // clientId -> { manifest, fetchedAt }
     this.languageManifestCache = {} // `${clientId}:${lang}` -> { manifest, fetchedAt }
@@ -142,7 +143,9 @@ class LauncherController {
       located: !!c.path,
       running: this.game.isRunning(id),
       button,
-      error: this.lastError[id] ?? null
+      error: this.lastError[id] ?? null,
+      languageActive: this.languagePack?.readActive(id)?.language ?? null,
+      languageWarning: this.languageWarning[id] ?? null
     }
   }
 
@@ -317,6 +320,7 @@ class LauncherController {
         throw new LauncherError('NOT_SUPPORTER', 'Your account is not confirmed as a Supporter.')
       }
       this.config.update({ [key]: true })
+      try { this.languagePack?.deactivate(clientId) } catch (err) { log.warn(`deactivate language ${clientId} failed`, err.message) }
       if (c.available) await this.refreshSupporterManifests(clientId)
       this.#publish()
 
@@ -324,10 +328,32 @@ class LauncherController {
       if (st.installed && st.supporterUpdateAvailable) {
         await this.syncSupporterContent(clientId)
       }
+      if (st.installed && (this.config.get().gameLanguage || 'enUS') !== 'enUS' && this.languagePack) {
+        try { this.supporterContent?.activate(clientId) } catch (err) { log.warn(`activate supporter ${clientId} failed`, err.message) }
+        const lang = this.config.get().gameLanguage
+        const lm = await this.refreshLanguageManifest(clientId, lang)
+        if (lm) {
+          await this.#run(clientId, 'update', async (signal) => {
+            await this.languagePack.sync(clientId, lm, { signal, onProgress: this.#progress('update') })
+            await this.languagePack.activate(clientId, lm, { signal })
+          })
+        }
+      }
     } else {
       this.config.update({ [key]: false })
       try { this.languagePack?.deactivate(clientId) } catch (err) { log.warn(`deactivate language ${clientId} failed`, err.message) }
       try { this.supporterContent?.deactivate(clientId) } catch (err) { log.warn(`deactivate supporter ${clientId} failed`, err.message) }
+      const st = this.clientState(clientId)
+      if (st.installed && (this.config.get().gameLanguage || 'enUS') !== 'enUS' && this.languagePack) {
+        const lang = this.config.get().gameLanguage
+        const lm = await this.refreshLanguageManifest(clientId, lang)
+        if (lm) {
+          await this.#run(clientId, 'update', async (signal) => {
+            await this.languagePack.sync(clientId, lm, { signal, onProgress: this.#progress('update') })
+            await this.languagePack.activate(clientId, lm, { signal })
+          })
+        }
+      }
       this.#publish()
     }
     return this.snapshot()
@@ -561,17 +587,50 @@ class LauncherController {
     await this.updater.apply(id, manifest, plan, { signal, onProgress: this.#progress('update') })
   }
 
+  /** Pre-launch version check: refreshes client/supporter manifests from API when online so Play never launches stale/incompatible versions. */
+  async #preLaunchVersionCheck(id) {
+    if (!this.api || !this.manifests?.fetch) return
+    if (this.api.lastStatus?.state !== 'online') return
+    try {
+      const m = await this.manifests.fetch(id)
+      this.manifestCache[id] = { manifest: m, fetchedAt: Date.now() }
+    } catch (err) {
+      if (err.code === 'LAUNCHER_OUTDATED') {
+        this.lastError[id] = toPlain(err)
+        this.#publish()
+        throw err
+      }
+      log.warn(`pre-launch manifest check for ${id} failed (continuing with cache)`, toPlain(err))
+    }
+    const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter)
+    if (supporterOn && this.manifests.fetchSupporterManifest) {
+      try {
+        const sm = await this.manifests.fetchSupporterManifest(id)
+        if (sm) this.supporterManifestCache[id] = { manifest: sm, fetchedAt: Date.now() }
+      } catch (err) {
+        log.warn(`pre-launch supporter manifest check for ${id} failed`, toPlain(err))
+      }
+    }
+  }
+
   async play(id) {
     if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
     delete this.lastError[id]
+    delete this.languageWarning[id]
+
+    // Verify live versions between launcher, client and supporter channel before starting WoW.
+    await this.#preLaunchVersionCheck(id)
+
     const state = this.clientState(id)
     if (state.updateAvailable) {
-      log.info(`update required before play for ${id}`)
+      log.info(`update required before play for ${id} (${state.version || 'base'} -> ${state.latestVersion})`)
       return this.update(id)
     }
     const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter)
     if (supporterOn && state.supporterUpdateAvailable) {
-      log.info(`supporter content update required before play for ${id}`)
+      log.info(`supporter content update required before play for ${id} (${state.supporterVersion || 'none'} -> ${state.supporterLatestVersion})`)
+      // Always deactivate language overlay before updating supporter base files
+      try { this.languagePack?.deactivate(id) } catch {}
       await this.syncSupporterContent(id)
     }
     if (platform.platform !== 'win32' && (!this.wine || !this.wine.found)) {
@@ -589,31 +648,57 @@ class LauncherController {
       if (supporterOn) this.supporterContent?.activate(id)
       else this.supporterContent?.deactivate(id)
 
+      let languageWarning = null
       if (lang !== 'enUS' && this.languagePack) {
-        const lm = this.languageManifestCache[`${id}:${lang}`]?.manifest ?? (await this.refreshLanguageManifest(id, lang))
+        const lm = (await this.refreshLanguageManifest(id, lang)) ?? this.languageManifestCache[`${id}:${lang}`]?.manifest
         if (lm) {
           const activeLang = this.languagePack.readActive(id)
           const { baseSha, variant } = await this.languagePack.resolveVariant(id, lm)
-          if (variant && (!activeLang || activeLang.language !== lang || activeLang.version !== lm.version || activeLang.baseSha256 !== baseSha)) {
-            await this.#run(id, 'update', async (signal) => {
-              await this.languagePack.sync(id, lm, {
-                signal,
-                onProgress: (p) => {
-                  if (this.task) this.task.stage = p.phase === 'downloading' ? 'update' : 'verify'
-                  this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
-                }
+          if (variant) {
+            if (!activeLang || activeLang.language !== lang || activeLang.version !== lm.version || activeLang.baseSha256 !== baseSha) {
+              await this.#run(id, 'update', async (signal) => {
+                await this.languagePack.sync(id, lm, {
+                  signal,
+                  onProgress: (p) => {
+                    if (this.task) this.task.stage = p.phase === 'downloading' ? 'update' : 'verify'
+                    this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
+                  }
+                })
               })
-            })
+            }
+            const act = await this.languagePack.activate(id, lm)
+            if (act?.missingVariant || !act?.applied) {
+              languageWarning = {
+                language: lang,
+                baseSha,
+                message: `Pacote ${lang} não pôde ser aplicado para esta versão do cliente; iniciando em inglês.`
+              }
+            }
+          } else {
+            log.warn(`pre-launch language check: no ${lang} variant matches base ${baseSha || 'unknown'} (manifest v${lm.version})`)
+            languageWarning = {
+              language: lang,
+              baseSha,
+              message: `O pacote de tradução ${lang} ainda não está disponível para esta versão do cliente; o jogo abrirá em inglês.`
+            }
           }
-          await this.languagePack.activate(id, lm)
+        } else {
+          languageWarning = {
+            language: lang,
+            baseSha: null,
+            message: `Não foi possível verificar o pacote de tradução ${lang}; o jogo abrirá no idioma atual.`
+          }
         }
       }
+      if (languageWarning) this.languageWarning[id] = languageWarning
+      else delete this.languageWarning[id]
+
       await this.syncAccountLanguage(lang)
 
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
       const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials })
       this.#publish()
-      return r
+      return languageWarning ? { ...r, languageWarning } : r
     } catch (err) {
       this.lastError[id] = toPlain(err)
       this.#publish()
