@@ -197,6 +197,24 @@ function validateLanguageManifest(m, expectedClient, expectedLang) {
     assertSafeUrl(f.url)
     return { path: p, size: f.size, sha256: f.sha256.toLowerCase(), url: f.url }
   })
+  let spellPatch = null
+  if (m.spell_patch) {
+    const sp = m.spell_patch
+    if (typeof sp !== 'object' || Array.isArray(sp)) fail('language spell_patch')
+    const targetMpq = normalizeRelative(sp.target_mpq || 'Data/patch-~.MPQ')
+    const sourceMpq = normalizeRelative(sp.source_mpq || 'Data/patch-Z.MPQ')
+    if (/^\.olk/i.test(targetMpq) || /^\.olk/i.test(sourceMpq)) fail('language spell_patch reserved path')
+    if (!Number.isSafeInteger(sp.size) || sp.size < 0) fail('language spell_patch.size')
+    if (!isSha256(sp.sha256)) fail('language spell_patch.sha256')
+    assertSafeUrl(sp.url)
+    spellPatch = {
+      target_mpq: targetMpq,
+      source_mpq: sourceMpq,
+      size: sp.size,
+      sha256: sp.sha256.toLowerCase(),
+      url: sp.url
+    }
+  }
   return {
     schema_version: 1,
     client: m.client,
@@ -204,7 +222,8 @@ function validateLanguageManifest(m, expectedClient, expectedLang) {
     version: m.version,
     target_path: m.target_path ? normalizeRelative(m.target_path) : 'Data/patch-Z.MPQ',
     variants,
-    files
+    files,
+    spell_patch: spellPatch
   }
 }
 

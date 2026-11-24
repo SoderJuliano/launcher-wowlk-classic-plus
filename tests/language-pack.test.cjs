@@ -195,4 +195,97 @@ describe('LanguagePackManager & gameLanguage config', () => {
     await assert.rejects(() => ctrl.play('wow32'), { code: 'LAUNCHER_OUTDATED' })
     assert.equal(launchCalled, false)
   })
+
+  it('composes a single global language pack (patch-V + spell_patch -> patch-~.MPQ) over ANY client without touching patch-Z.MPQ', async () => {
+    const zlib = require('node:zlib')
+    const { createMpqArchive, extractFileFromMpq } = require('../electron/core/mpqDbcComposer.cjs')
+    const { config, gameDir } = makeEnv()
+
+    // Helper: construct a minimal valid 234-field WDBC Spell.dbc with 1 spell (id=133, visualId=customVisual)
+    function makeSpellDbc(visualId, nameEn) {
+      const fc = 234
+      const rs = fc * 4
+      const strBuf = Buffer.from(`\0${nameEn}\0`, 'utf8')
+      const hdr = Buffer.alloc(20)
+      hdr.write('WDBC', 0, 'ascii')
+      hdr.writeUInt32LE(1, 4)
+      hdr.writeUInt32LE(fc, 8)
+      hdr.writeUInt32LE(rs, 12)
+      hdr.writeUInt32LE(strBuf.length, 16)
+      const row = Buffer.alloc(rs)
+      row.writeUInt32LE(133, 0)         // spellId
+      row.writeUInt32LE(visualId, 131 * 4) // SpellVisualID[0]
+      row.writeUInt32LE(1, 136 * 4)    // Name_lang[0] -> offset 1
+      row.writeUInt32LE(0x10101ff, 152 * 4) // Name_lang flags
+      return Buffer.concat([hdr, row, strBuf])
+    }
+
+    const patchZPath = path.join(gameDir, 'Data', 'patch-Z.MPQ')
+    const patchVBytes = Buffer.from('GLOBAL-PATCH-V-54-DBCS-AND-LUA')
+    const spellGzBytes = zlib.gzipSync(Buffer.from(JSON.stringify({
+      schema_version: 1,
+      language: 'ptBR',
+      locstring_fields: [136, 153, 170, 187],
+      spells: { '133': ['Bola de Fogo', 'Grau 1'] }
+    })))
+
+    // Start with standard Global patch-Z.MPQ (visualId = 100)
+    createMpqArchive(patchZPath, [{ name: 'DBFilesClient\\Spell.dbc', data: makeSpellDbc(100, 'Fireball') }])
+    const globalZSha = sha(fs.readFileSync(patchZPath))
+
+    const downloader = {
+      downloads: 0,
+      async download({ url, dest }) {
+        this.downloads++
+        fs.writeFileSync(dest, url.endsWith('.gz') ? spellGzBytes : patchVBytes)
+      }
+    }
+
+    const manifest = validateLanguageManifest({
+      schema_version: 1,
+      client: 'wow32',
+      language: 'ptBR',
+      version: '2.0.0',
+      files: [{ path: 'Data/patch-V.MPQ', size: patchVBytes.length, sha256: sha(patchVBytes), url: 'https://cdn.example.com/patch-V.MPQ' }],
+      spell_patch: {
+        target_mpq: 'Data/patch-~.MPQ',
+        source_mpq: 'Data/patch-Z.MPQ',
+        size: spellGzBytes.length,
+        sha256: sha(spellGzBytes),
+        url: 'https://cdn.example.com/spell-strings-ptBR.json.gz'
+      },
+      variants: {}
+    }, 'wow32', 'ptBR')
+
+    const mgr = new LanguagePackManager({ config, downloader })
+    const s = await mgr.sync('wow32', manifest)
+    assert.equal(s.composable, true)
+    assert.equal(s.downloaded, 2)
+
+    // Activate on Global client: patch-Z untouched, patch-V and patch-~ created with visualId=100 + PT-BR name
+    const a1 = await mgr.activate('wow32', manifest)
+    assert.equal(a1.applied, 2)
+    assert.equal(sha(fs.readFileSync(patchZPath)), globalZSha, 'Data/patch-Z.MPQ must NEVER be modified')
+    const dbc1 = extractFileFromMpq(path.join(gameDir, 'Data', 'patch-~.MPQ'), 'DBFilesClient\\Spell.dbc')
+    assert.equal(dbc1.readUInt32LE(20 + 131 * 4), 100, 'Global SpellVisualID preserved')
+    const nameOff1 = dbc1.readUInt32LE(20 + 136 * 4)
+    const strStart1 = 20 + 234 * 4
+    assert.equal(dbc1.toString('utf8', strStart1 + nameOff1, dbc1.indexOf(0, strStart1 + nameOff1)), 'Bola de Fogo')
+
+    // Now simulate Supporter overlay updating Data/patch-Z.MPQ (visualId = 26241) -> same global PT-BR recomposes with 0 downloads!
+    createMpqArchive(patchZPath, [{ name: 'DBFilesClient\\Spell.dbc', data: makeSpellDbc(26241, 'Fireball') }])
+    const a2 = await mgr.activate('wow32', manifest)
+    assert.equal(a2.applied, 2)
+    assert.equal(downloader.downloads, 2, 'no extra download needed when supporter updates patch-Z')
+    const dbc2 = extractFileFromMpq(path.join(gameDir, 'Data', 'patch-~.MPQ'), 'DBFilesClient\\Spell.dbc')
+    assert.equal(dbc2.readUInt32LE(20 + 131 * 4), 26241, 'Supporter SpellVisualID preserved')
+    const nameOff2 = dbc2.readUInt32LE(20 + 136 * 4)
+    const strStart2 = 20 + 234 * 4
+    assert.equal(dbc2.toString('utf8', strStart2 + nameOff2, dbc2.indexOf(0, strStart2 + nameOff2)), 'Bola de Fogo')
+
+    // Deactivate removes patch-V and patch-~ cleanly
+    mgr.deactivate('wow32')
+    assert.equal(fs.existsSync(path.join(gameDir, 'Data', 'patch-V.MPQ')), false)
+    assert.equal(fs.existsSync(path.join(gameDir, 'Data', 'patch-~.MPQ')), false)
+  })
 })

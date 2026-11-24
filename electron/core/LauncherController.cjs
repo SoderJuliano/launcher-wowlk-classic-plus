@@ -653,9 +653,14 @@ class LauncherController {
         const lm = (await this.refreshLanguageManifest(id, lang)) ?? this.languageManifestCache[`${id}:${lang}`]?.manifest
         if (lm) {
           const activeLang = this.languagePack.readActive(id)
-          const { baseSha, variant } = await this.languagePack.resolveVariant(id, lm)
-          if (variant) {
-            if (!activeLang || activeLang.language !== lang || activeLang.version !== lm.version || activeLang.baseSha256 !== baseSha) {
+          const { baseSha, variant, composable } = await this.languagePack.resolveVariant(id, lm)
+          if (composable || variant) {
+            const needsSyncOrCompose = !activeLang
+              || activeLang.language !== lang
+              || activeLang.version !== lm.version
+              || activeLang.baseSha256 !== baseSha
+              || (!!lm.spell_patch && !activeLang.spellPatch)
+            if (needsSyncOrCompose) {
               await this.#run(id, 'update', async (signal) => {
                 await this.languagePack.sync(id, lm, {
                   signal,
@@ -664,18 +669,27 @@ class LauncherController {
                     this.#progress(p.phase === 'downloading' ? 'update' : 'verify')(p)
                   }
                 })
+                const act = await this.languagePack.activate(id, lm, { signal })
+                if (act?.missingVariant || !act?.applied) {
+                  languageWarning = {
+                    language: lang,
+                    baseSha,
+                    message: `Pacote ${lang} não pôde ser aplicado para esta versão do cliente; iniciando em inglês.`
+                  }
+                }
               })
-            }
-            const act = await this.languagePack.activate(id, lm)
-            if (act?.missingVariant || !act?.applied) {
-              languageWarning = {
-                language: lang,
-                baseSha,
-                message: `Pacote ${lang} não pôde ser aplicado para esta versão do cliente; iniciando em inglês.`
+            } else {
+              const act = await this.languagePack.activate(id, lm)
+              if (act?.missingVariant || !act?.applied) {
+                languageWarning = {
+                  language: lang,
+                  baseSha,
+                  message: `Pacote ${lang} não pôde ser aplicado para esta versão do cliente; iniciando em inglês.`
+                }
               }
             }
           } else {
-            log.warn(`pre-launch language check: no ${lang} variant matches base ${baseSha || 'unknown'} (manifest v${lm.version})`)
+            log.warn(`pre-launch language check: no ${lang} package available for base ${baseSha || 'unknown'} (manifest v${lm.version})`)
             languageWarning = {
               language: lang,
               baseSha,
