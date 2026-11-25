@@ -337,20 +337,27 @@ end
 -- Liga e desliga ---------------------------------------------------------------
 function SoderPadLigado() return ligado end
 
--- Saque automatico so no modo controle: a escolha do jogador volta ao desligar.
+-- Saque automatico e clique-para-mover so no modo controle: a escolha do jogador volta ao desligar.
+-- Guarda o estado anterior em SoderPadDB para restaurar no proximo login caso o jogo feche no modo controle
+-- (evita deixar autoInteract/Click-to-Move travado ligado no teclado+mouse).
 local autoLootAntes, autoInteractAntes
 local function SaqueAutomatico(ligar)
+    SoderPadDB = SoderPadDB or {}
     if ligar then
-        autoLootAntes = autoLootAntes or GetCVar("autoLootDefault")
+        autoLootAntes = autoLootAntes or SoderPadDB.autoLootAntes or GetCVar("autoLootDefault")
+        SoderPadDB.autoLootAntes = autoLootAntes
         SetCVar("autoLootDefault", "1")
         -- A coleta do leitor usa o clique-para-mover do jogo.
-        autoInteractAntes = autoInteractAntes or GetCVar("autoInteract")
+        autoInteractAntes = autoInteractAntes or SoderPadDB.autoInteractAntes or GetCVar("autoInteract")
+        SoderPadDB.autoInteractAntes = autoInteractAntes
         SetCVar("autoInteract", "1")
-    elseif autoLootAntes then
-        SetCVar("autoLootDefault", autoLootAntes)
-        autoLootAntes = nil
-        if autoInteractAntes then SetCVar("autoInteract", autoInteractAntes) end
-        autoInteractAntes = nil
+    elseif autoLootAntes or SoderPadDB.autoInteractAntes ~= nil or SoderPadDB.autoLootAntes ~= nil then
+        local loot = autoLootAntes or SoderPadDB.autoLootAntes
+        local inter = autoInteractAntes or SoderPadDB.autoInteractAntes
+        if loot then SetCVar("autoLootDefault", loot) end
+        if inter then SetCVar("autoInteract", inter) end
+        autoLootAntes, autoInteractAntes = nil, nil
+        SoderPadDB.autoLootAntes, SoderPadDB.autoInteractAntes = nil, nil
     end
 end
 
@@ -463,6 +470,10 @@ eventos:SetScript("OnEvent", function(_, evento)
         SetOverrideBindingClick(sinais, false, "ALT-CTRL-SHIFT-F12", "SoderPadSinalOff")
         -- Garante que todas as barras de acao estejam 100% visiveis no login
         EsconderBarras(false)
+        -- Se o jogo fechou enquanto o modo controle estava ligado, restaura autoInteract/autoLoot no login em teclado+mouse
+        if SoderPadDB and (SoderPadDB.autoInteractAntes ~= nil or SoderPadDB.autoLootAntes ~= nil) then
+            SaqueAutomatico(false)
+        end
     elseif evento == "PLAYER_REGEN_ENABLED" then
         Sincronizar()
         if ligado then AtualizarCasas() end
