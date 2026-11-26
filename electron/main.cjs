@@ -226,10 +226,12 @@ function registerIpc() {
     if (err) throw new LauncherError('OPEN_FAILED', err)
   })
   handle('openLogs', () => shell.openPath(path.dirname(log.file)))
-  handle('openWebsite', async () => {
+  handle('openWebsite', async (subPath = '') => {
     const raw = (controller.config.get().websiteUrl || '').trim() || 'https://wow-classic-lk-plus.netlify.app'
     assertSafeUrl(raw, { allowHttpLocalhost: false })
-    const url = await controller.buildWebsiteUrl(raw)
+    const cleanPath = typeof subPath === 'string' && /^\/[A-Za-z0-9/_-]*$/.test(subPath.trim()) ? subPath.trim() : ''
+    const target = cleanPath ? `${raw.replace(/\/+$/, '')}${cleanPath}` : raw
+    const url = await controller.buildWebsiteUrl(target)
     return shell.openExternal(url)
   })
   handle('locate', async (id) => {

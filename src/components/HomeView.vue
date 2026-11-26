@@ -269,21 +269,33 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
           <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
           <div v-if="snap.wine?.needed"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
         </dl>
-        <button
-          v-if="snap.supporter?.supporter"
-          type="button"
-          class="sup-toggle"
-          :class="{ 'is-on': supporterContentOn }"
-          role="switch"
-          :aria-checked="supporterContentOn"
-          :disabled="!client.available || busy || togglingSupporter || client.running"
-          @click="toggleSupporterContent"
-        >
-          <span class="sup-toggle__label">Enable new content</span>
-          <span class="sup-toggle__track" :class="{ 'is-on': supporterContentOn }">
-            <span class="sup-toggle__thumb" />
-          </span>
-        </button>
+        <div v-if="snap.supporter?.supporter || client.id === 'wow64'" class="hero__sup-row">
+          <button
+            v-if="snap.supporter?.supporter"
+            type="button"
+            class="sup-toggle"
+            :class="{ 'is-on': supporterContentOn }"
+            role="switch"
+            :aria-checked="supporterContentOn"
+            :disabled="!client.available || busy || togglingSupporter || client.running"
+            @click="toggleSupporterContent"
+          >
+            <span class="sup-toggle__label">Enable new content</span>
+            <span class="sup-toggle__track" :class="{ 'is-on': supporterContentOn }">
+              <span class="sup-toggle__thumb" />
+            </span>
+          </button>
+          <button
+            v-if="client.id === 'wow64'"
+            type="button"
+            class="ea-link"
+            title="Abrir página do Cliente 64-bit no site"
+            @click="run('openWebsite', '/client-64')"
+          >
+            <Icon name="globe" :size="14" />
+            <span>Acesso antecipado</span>
+          </button>
+        </div>
         <div v-if="snap.launcherUpdateError" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
           <div class="wine-alert__content">
@@ -421,10 +433,25 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 .cc__dot.idle { background: var(--gold-300); }
 .cc__dot.off { background: var(--text-400); }
 .side__links { margin-top: auto; display: grid; gap: 2px; }
+.hero__sup-row {
+  margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+}
 .sup-toggle {
-  margin-top: 14px; display: inline-flex; align-items: center; gap: 12px; padding: 8px 12px;
+  display: inline-flex; align-items: center; gap: 12px; padding: 8px 12px;
   border-radius: 4px; border: 1px solid var(--line); background: rgba(3, 6, 10, .6);
   cursor: pointer; transition: border-color .2s, background .2s;
+}
+.ea-link {
+  display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px;
+  border-radius: 4px; border: 1px solid rgba(127, 203, 255, .42);
+  background: rgba(15, 42, 70, .72); color: var(--ice-100);
+  font: 600 .8rem/1 var(--font-body); letter-spacing: .04em; text-decoration: underline;
+  text-underline-offset: 3px; cursor: pointer;
+  transition: border-color .2s, background .2s, color .2s, box-shadow .2s;
+}
+.ea-link:hover {
+  border-color: var(--gold-300); background: rgba(233, 196, 106, .14); color: var(--gold-100);
+  box-shadow: 0 0 18px -4px var(--ice-glow);
 }
 .sup-toggle:hover:not(:disabled) { border-color: var(--line-strong); }
 .sup-toggle.is-on { border-color: var(--gold-400); background: rgba(233, 196, 106, .1); }
