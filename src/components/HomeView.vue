@@ -30,7 +30,11 @@ const BUTTON = {
   ERROR: { label: 'Retry', icon: 'refresh', error: true },
   UNAVAILABLE: { label: 'Coming soon', disabled: true }
 }
-const btn = computed(() => BUTTON[client.value.button] || BUTTON.INSTALL)
+const btn = computed(() => {
+  const b = BUTTON[client.value.button] || BUTTON.INSTALL
+  // 64-bit early access: the first step is a download (the package comes from the early-access manifest).
+  return client.value.earlyAccess && client.value.button === 'INSTALL' ? { ...b, label: 'Download' } : b
+})
 
 const STAGE_TEXT = { download: 'Downloading game package', extract: 'Installing files', verify: 'Verifying files', update: 'Downloading updates', starting: 'Preparing' }
 const statusLine = computed(() => {
@@ -47,11 +51,14 @@ const statusLine = computed(() => {
   }
   if (busy.value) return 'Preparing…'
   if (c.error) return c.error.message
+  if (!c.available && c.earlyAccess && snap.value?.earlyAccess64?.member) return gameLanguage.value === 'ptBR' ? 'Ative "Enable new content" para baixar o cliente 64-bit.' : 'Turn on "Enable new content" to download the 64-bit client.'
+  if (!c.available && c.earlyAccess) return 'The 64-bit client is in early access for project supporters.'
   if (!c.available) return 'This client is in development and not available yet.'
   if (c.running) return 'The game is running.'
   if (c.installed && c.located && !c.updateAvailable) return `Ready to play · using your existing folder${c.version ? ` · version ${c.version}` : ''}`
   if (c.installed) return c.updateAvailable ? `Update available: ${c.version ?? 'base'} → ${c.latestVersion}` : `Ready to play${c.version ? ` · version ${c.version}` : ''}`
   if (c.missing?.length) return `Installation incomplete — missing ${c.missing.length} file(s).`
+  if (c.earlyAccess) return 'Not installed. Click Download to get the 64-bit client (early access).'
   if (!c.hasPackageSource) return 'Not installed. Already have the game? Click "Locate game" and select its folder.'
   return 'Not installed. Install (about 35 GB) or locate an existing installation.'
 })
@@ -176,9 +183,19 @@ async function setLanguage(lang) {
   }
 }
 const togglingSupporter = ref(false)
-const supporterContentOn = computed(() => !!(client.value?.supporterContentEnabled && snap.value?.supporter?.supporter))
+/** 32-bit: R$ 29,90 supporters (wowlk_site.donation). 64-bit: early access (wowlk_site.wowsixtyfordev). */
+const canToggle = computed(() => client.value?.earlyAccess ? !!snap.value?.earlyAccess64?.member : !!snap.value?.supporter?.supporter)
+const supporterContentOn = computed(() => !!(client.value?.supporterContentEnabled && canToggle.value))
+const EA_TIP_KEY = 'olk.ea64TipDismissed'
+const eaTipDismissed = ref(typeof localStorage !== 'undefined' && localStorage.getItem(EA_TIP_KEY) === '1')
+const showEaTip = computed(() => !!(client.value?.earlyAccess && canToggle.value && !supporterContentOn.value && !eaTipDismissed.value))
+const eaTipText = computed(() => gameLanguage.value === 'ptBR' ? 'Habilite esta opção para jogar agora' : 'Enable this option to play now')
+function dismissEaTip() {
+  eaTipDismissed.value = true
+  try { localStorage.setItem(EA_TIP_KEY, '1') } catch {}
+}
 async function toggleSupporterContent() {
-  if (togglingSupporter.value || busy.value || !client.value?.available) return
+  if (togglingSupporter.value || busy.value || (!client.value?.available && !client.value?.earlyAccess)) return
   togglingSupporter.value = true
   try {
     const next = !supporterContentOn.value
@@ -269,21 +286,31 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
           <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
           <div v-if="snap.wine?.needed"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
         </dl>
-        <div v-if="snap.supporter?.supporter || client.id === 'wow64'" class="hero__sup-row">
+        <div class="hero__sup-row">
           <button
-            v-if="snap.supporter?.supporter"
+            v-if="canToggle"
             type="button"
             class="sup-toggle"
             :class="{ 'is-on': supporterContentOn }"
             role="switch"
             :aria-checked="supporterContentOn"
-            :disabled="!client.available || busy || togglingSupporter || client.running"
+            :disabled="(!client.available && !client.earlyAccess) || busy || togglingSupporter || client.running"
             @click="toggleSupporterContent"
           >
             <span class="sup-toggle__label">Enable new content</span>
             <span class="sup-toggle__track" :class="{ 'is-on': supporterContentOn }">
               <span class="sup-toggle__thumb" />
             </span>
+          </button>
+          <button
+            v-if="!client.earlyAccess && !canToggle"
+            type="button"
+            class="ea-link"
+            title="Abrir a página de apoiador no site (acesso antecipado às novas funcionalidades)"
+            @click="run('openWebsite', '/donate')"
+          >
+            <Icon name="globe" :size="14" />
+            <span>Acesso antecipado</span>
           </button>
           <button
             v-if="client.id === 'wow64'"
@@ -295,6 +322,10 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
             <Icon name="globe" :size="14" />
             <span>Acesso antecipado</span>
           </button>
+        </div>
+        <div v-if="showEaTip" class="ea-tip" role="status">
+          <span>{{ eaTipText }}</span>
+          <button type="button" class="ea-tip__x" :aria-label="gameLanguage === 'ptBR' ? 'Fechar' : 'Close'" @click="dismissEaTip">×</button>
         </div>
         <div v-if="snap.launcherUpdateError" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
@@ -395,7 +426,7 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 
         <div class="bar__actions">
           <button v-if="busy" type="button" class="btn btn--danger" @click="run('cancel')" @pointerup.stop.prevent="run('cancel')"><Icon name="stop" /> Cancel</button>
-          <button v-else-if="client.available && !client.installed" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate game</button>
+          <button v-else-if="client.available && !client.installed && !client.earlyAccess" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate game</button>
           <button v-else-if="client.installed && client.available && client.latestVersion" type="button" class="btn btn--ghost" title="Check and repair game files" @click="run('repair', client.id)" @pointerup.stop.prevent="run('repair', client.id)"><Icon name="wrench" /> Repair</button>
           <button
             type="button" class="main" :class="{ 'main--busy': btn.busy, 'main--err': btn.error, 'main--play': client.button === 'PLAY' }"
@@ -454,6 +485,10 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
   box-shadow: 0 0 18px -4px var(--ice-glow);
 }
 .sup-toggle:hover:not(:disabled) { border-color: var(--line-strong); }
+.ea-tip { position: relative; width: max-content; margin-top: 10px; display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 6px 8px 6px 12px; font-size: .78rem; color: #1a1005; background: linear-gradient(180deg, #f5d27a, #d4a03a); border: 1px solid #ffe8a8; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, .5); }
+.ea-tip::before { content: ''; position: absolute; left: 18px; top: -6px; border: 6px solid transparent; border-top: 0; border-bottom-color: #f5d27a; }
+.ea-tip__x { border: 0; background: rgba(0, 0, 0, .12); color: #1a1005; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: .95rem; line-height: 1; }
+.ea-tip__x:hover { background: rgba(0, 0, 0, .25); }
 .sup-toggle.is-on { border-color: var(--gold-400); background: rgba(233, 196, 106, .1); }
 .sup-toggle:disabled { opacity: .5; cursor: default; }
 .sup-toggle__label { font: 600 .8rem/1 var(--font-body); color: var(--text-100); letter-spacing: .04em; }

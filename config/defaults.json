@@ -40,6 +40,7 @@
     "wow64": {
       "name": "Classic Plus LK — 64-bit",
       "architecture": "x64",
+      "earlyAccess": true,
       "executable": "",
       "packageRoot": "",
       "basePackage": {

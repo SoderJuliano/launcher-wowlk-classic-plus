@@ -18,7 +18,7 @@ function deepMerge(base, over) {
 }
 
 /** Only these keys can be changed from the UI (the rest is factory/manifest data). */
-const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'gameLanguage', 'selectedClient', 'clients.wow32.supporterContentEnabled', 'clients.wow64.supporterContentEnabled', 'installDir', 'wine.path', 'wine.prefix', 'graphics.filtersEnabled', 'graphics.useDxvk', 'graphics.resolutionMode', 'graphics.customResolution', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
+const EDITABLE = ['api.baseUrl', 'api.discovery.enabled', 'realmlist', 'locale', 'gameLanguage', 'selectedClient', 'clients.wow32.supporterContentEnabled', 'clients.wow64.supporterContentEnabled', 'clients.wow64.earlyAccessAutoEnabledFor', 'installDir', 'wine.path', 'wine.prefix', 'graphics.filtersEnabled', 'graphics.useDxvk', 'graphics.resolutionMode', 'graphics.customResolution', 'clients.wow32.basePackage.url', 'clients.wow64.basePackage.url', 'clients.wow32.path', 'clients.wow64.path', 'clients.wow32.manifestUrl', 'clients.wow64.manifestUrl', 'websiteUrl']
 
 class ConfigurationManager {
   /**
@@ -72,6 +72,12 @@ class ConfigurationManager {
   }
 
   #validate(key, value) {
+    if (key.endsWith('.earlyAccessAutoEnabledFor')) {
+      if (!Array.isArray(value) || value.length > 50 || !value.every((u) => typeof u === 'string' && u.length <= 32)) {
+        throw new LauncherError('CONFIG_INVALID', `${key} must be a list of account names`)
+      }
+      return
+    }
     if (value === null || value === '') return
     if (key.endsWith('Url') || key.endsWith('.url') || key === 'api.baseUrl' || key.endsWith('.manifestUrl')) {
       if (typeof value !== 'string') throw new LauncherError('CONFIG_INVALID', `${key} must be a URL`)

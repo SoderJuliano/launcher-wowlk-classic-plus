@@ -28,6 +28,8 @@ class LauncherController {
     this.supporterManifestCache = {} // clientId -> { manifest, fetchedAt }
     this.languageManifestCache = {} // `${clientId}:${lang}` -> { manifest, fetchedAt }
     this.supporter = null // { supporter: boolean, since: string | null, donations: number } | null
+    /** 64-bit early access (Pikachu /donation/v1/client64/me = wowlk_site.wowsixtyfordev). */
+    this.earlyAccess64 = null // { member: boolean, since: string | null } | null
     this.supporterCheckedAt = 0
     this.initialized = false
     this.wine = null
@@ -99,13 +101,24 @@ class LauncherController {
   /** "Locate installed game": adopt an existing folder chosen by the player (no copy). */
   async locate(id, dir) {
     if (this.task) throw new LauncherError('BUSY', 'Wait for the current operation to finish.')
-    if (!this.config.client(id).available) throw new LauncherError('CLIENT_UNAVAILABLE', 'This client is not available yet.')
+    if (!this.isAvailable(id)) throw new LauncherError('CLIENT_UNAVAILABLE', 'This client is not available yet.')
     const { dir: gameDir } = this.installer.adopt(id, dir)
     this.config.update({ [`clients.${id}.path`]: gameDir })
     delete this.lastError[id]
     await this.refreshManifests()
     this.#publish()
     return this.clientState(id)
+  }
+
+  /**
+   * Early-access clients (wow64, 27/11/2026): only for accounts in wowlk_site.wowsixtyfordev and
+   * only while the player keeps "Enable new content" on; otherwise "Coming soon". The API also
+   * refuses the manifest and the game ticket to anyone else, so this is not the only lock.
+   */
+  isAvailable(id) {
+    const c = this.config.client(id)
+    if (c.earlyAccess) return !!(this.earlyAccess64?.member && c.supporterContentEnabled)
+    return !!c.available
   }
 
   clientState(id) {
@@ -119,7 +132,8 @@ class LauncherController {
     const supporterActive = this.supporterContent?.isActive(id) || false
     const supporterUpdateAvailable = !!(v.installed && supporterEnabled && sm && sState?.version !== sm.version)
     let button = 'INSTALL'
-    if (!c.available) button = 'UNAVAILABLE'
+    const available = this.isAvailable(id)
+    if (!available) button = 'UNAVAILABLE'
     else if (this.task?.id === id) button = { download: 'DOWNLOADING', extract: 'INSTALLING', verify: 'VERIFYING', update: 'UPDATING' }[this.task.stage] || 'INSTALLING'
     else if (this.game.isRunning(id)) button = 'RUNNING'
     else if (this.lastError[id]) button = 'ERROR'
@@ -129,7 +143,8 @@ class LauncherController {
       id,
       name: c.name,
       architecture: c.architecture,
-      available: c.available,
+      available,
+      earlyAccess: !!c.earlyAccess,
       installed: v.installed,
       missing: v.missing,
       version: v.state?.version ?? null,
@@ -162,6 +177,7 @@ class LauncherController {
       api: this.api.lastStatus,
       user: this.auth.user,
       supporter: this.supporter,
+      earlyAccess64: this.earlyAccess64,
       authenticated: this.auth.isAuthenticated(),
       hasSavedPassword: !!this.auth.password,
       selectedClient: cfg.selectedClient,
@@ -222,6 +238,7 @@ class LauncherController {
   async logout() {
     await this.auth.logout()
     this.supporter = null
+    this.earlyAccess64 = null
     this.manifestCache = {}
     this.supporterManifestCache = {}
     for (const id of Object.keys(this.config.get().clients)) {
@@ -246,7 +263,46 @@ class LauncherController {
     } catch (err) {
       log.warn('supporter status unavailable', toPlain(err))
     }
+    await this.refreshEarlyAccess64()
     return this.supporter
+  }
+
+  /**
+   * 64-bit early access: GET /donation/v1/client64/me (wowlk_site.wowsixtyfordev). The first time
+   * an account is seen as a member, "Enable new content" of the early-access clients is turned on
+   * by itself (once: if the player turns it off later, it stays off).
+   */
+  async refreshEarlyAccess64() {
+    if (!this.auth.isAuthenticated() && !this.auth.session) {
+      this.earlyAccess64 = null
+      return null
+    }
+    try {
+      const token = await this.auth.accessToken()
+      const res = await this.api.request('GET', '/client64/me', { token, prefix: '/donation/v1' })
+      this.earlyAccess64 = res && typeof res.supporter === 'boolean' ? { member: res.supporter, since: res.since ?? null } : null
+    } catch (err) {
+      log.warn('64-bit early access status unavailable', toPlain(err))
+      return this.earlyAccess64
+    }
+    if (this.earlyAccess64?.member) {
+      const user = String(this.auth.user?.username || '').toUpperCase()
+      let changed = false
+      for (const id of Object.keys(this.config.get().clients)) {
+        const c = this.config.client(id)
+        if (!c.earlyAccess) continue
+        const seen = Array.isArray(c.earlyAccessAutoEnabledFor) ? c.earlyAccessAutoEnabledFor : []
+        if (seen.includes(user)) continue
+        this.config.update({ [`clients.${id}.supporterContentEnabled`]: true, [`clients.${id}.earlyAccessAutoEnabledFor`]: [...seen, user] })
+        log.info(`64-bit early access: ${user} is a member, new content enabled for ${id}`)
+        changed = true
+      }
+      if (changed) {
+        await this.refreshManifests().catch(() => {})
+        this.#publish()
+      }
+    }
+    return this.earlyAccess64
   }
 
   async refreshSupporterIfStale(maxAgeMs = 15_000) {
@@ -291,7 +347,7 @@ class LauncherController {
     const ids = onlyClientId ? [onlyClientId] : Object.keys(this.config.get().clients)
     for (const id of ids) {
       const c = this.config.client(id)
-      if (!c.available || !c.supporterContentEnabled) continue
+      if (c.earlyAccess || !c.available || !c.supporterContentEnabled) continue
       try {
         const m = await this.manifests.fetchSupporterManifest(id)
         if (m) this.supporterManifestCache[id] = { manifest: m, fetchedAt: Date.now() }
@@ -315,6 +371,23 @@ class LauncherController {
       throw new LauncherError('ALREADY_RUNNING', 'Close the game before changing new content settings.')
     }
     const key = `clients.${clientId}.supporterContentEnabled`
+
+    if (c.earlyAccess) {
+      if (enabled) {
+        await this.refreshEarlyAccess64()
+        if (!this.earlyAccess64?.member) {
+          this.config.update({ [key]: false })
+          this.#publish()
+          throw new LauncherError('NOT_SUPPORTER', 'Your account does not have 64-bit early access yet.')
+        }
+        this.config.update({ [key]: true })
+        await this.refreshManifests()
+      } else {
+        this.config.update({ [key]: false })
+      }
+      this.#publish()
+      return this.clientState(clientId)
+    }
 
     if (enabled) {
       await this.refreshSupporter()
@@ -469,7 +542,7 @@ class LauncherController {
   async refreshManifests() {
     for (const id of Object.keys(this.config.get().clients)) {
       const c = this.config.client(id)
-      if (!c.available) continue
+      if (!this.isAvailable(id)) continue
       if (this.api.lastStatus.state !== 'online' && !c.manifestUrl) continue
       try {
         this.manifestCache[id] = { manifest: await this.manifests.fetch(id), fetchedAt: Date.now() }
@@ -485,7 +558,7 @@ class LauncherController {
 
   #begin(id, kind) {
     if (this.task) throw new LauncherError('BUSY', 'Another operation is already running.')
-    if (!this.config.client(id).available) throw new LauncherError('CLIENT_UNAVAILABLE', 'This client is not available yet.')
+    if (!this.isAvailable(id)) throw new LauncherError('CLIENT_UNAVAILABLE', 'This client is not available yet.')
     if (this.game.isRunning(id)) throw new LauncherError('ALREADY_RUNNING', 'Close the game first.')
     delete this.lastError[id]
     this.task = { id, kind, stage: 'download', phase: 'starting', done: 0, total: 0, controller: new AbortController() }
