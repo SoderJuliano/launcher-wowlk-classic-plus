@@ -62,3 +62,24 @@ test('64-bit client is never started without a ticket', async () => {
   const launcher = new GameLauncher({ config, installer, spawnImpl: () => assert.fail('spawned'), platformName: 'linux' })
   await assert.rejects(launcher.launch('wow64', {}), { code: 'LAUNCH_FAILED' })
 })
+
+test('Windows: the 64-bit client is soder-nextgen-mmo.exe, started directly with the handoff on stdin', async () => {
+  const path = require('node:path')
+  const fs = require('node:fs')
+  const { ConfigurationManager } = require('../electron/core/ConfigurationManager.cjs')
+  const data = tmpDir()
+  const config = new ConfigurationManager({ defaultsFile: path.join(__dirname, '..', 'config', 'defaults.json'), dataDir: data, platformName: 'win32' })
+  assert.equal(config.client('wow64').executable, 'soder-nextgen-mmo.exe')
+  assert.equal(config.client('wow32').executable, 'Wow.exe')
+  const dir = config.clientDir('wow64')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'soder-nextgen-mmo.exe'), 'MZ')
+  const calls = []
+  const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, opts }); return spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>{})'], { stdio: opts.stdio }) }
+  const installer = { verify: () => ({ installed: true, missing: [] }), ensureRealmlist: () => {} }
+  const launcher = new GameLauncher({ config, installer, spawnImpl, platformName: 'win32' })
+  const exited = new Promise((r) => launcher.launch('wow64', { onExit: r, handoff: { v: 1 } }))
+  await exited
+  assert.equal(calls[0].cmd, path.join(dir, 'soder-nextgen-mmo.exe'))
+  assert.equal(calls[0].opts.stdio[0], 'pipe')
+})

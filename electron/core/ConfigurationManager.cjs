@@ -24,7 +24,8 @@ class ConfigurationManager {
   /**
    * @param {{ defaultsFile: string, dataDir: string }} opts
    */
-  constructor({ defaultsFile, dataDir }) {
+  constructor({ defaultsFile, dataDir, platformName = process.platform }) {
+    this.platform = platformName
     this.dataDir = dataDir
     this.file = path.join(dataDir, 'settings.json')
     this.defaults = JSON.parse(fs.readFileSync(defaultsFile, 'utf8'))
@@ -42,7 +43,9 @@ class ConfigurationManager {
   client(id) {
     const c = this.get().clients[id]
     if (!c) throw new LauncherError('UNKNOWN_CLIENT', `Unknown client: ${id}`)
-    return { id, ...c }
+    // Native clients ship a different file name per OS (wow64: soder-nextgen-mmo / .exe).
+    const exe = this.platform === 'win32' && c.executableWin32 ? c.executableWin32 : c.executable
+    return { id, ...c, executable: exe }
   }
 
   /** Install folder of a client: an adopted existing folder (clients.<id>.path) or <installDir>/<id>. */

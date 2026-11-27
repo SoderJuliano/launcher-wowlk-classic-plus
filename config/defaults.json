@@ -42,6 +42,7 @@
       "architecture": "x64",
       "earlyAccess": true,
       "executable": "soder-nextgen-mmo",
+      "executableWin32": "soder-nextgen-mmo.exe",
       "packageRoot": "",
       "basePackage": {
         "url": "",

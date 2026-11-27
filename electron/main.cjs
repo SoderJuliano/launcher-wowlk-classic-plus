@@ -221,8 +221,11 @@ function registerIpc() {
     return shell.openExternal(clean)
   })
   handle('openGameFolder', async (id) => {
+    // Opens the client's folder, creating it first (a client never installed has none yet, and
+    // neither may the install folder: shell.openPath then failed with "folder does not exist").
     const dir = controller.config.clientDir(String(id))
-    const err = await shell.openPath(require('node:fs').existsSync(dir) ? dir : controller.config.get().installDir)
+    try { require('node:fs').mkdirSync(dir, { recursive: true }) } catch {}
+    const err = await shell.openPath(dir)
     if (err) throw new LauncherError('OPEN_FAILED', err)
   })
   handle('openLogs', () => shell.openPath(path.dirname(log.file)))
@@ -236,7 +239,7 @@ function registerIpc() {
   })
   handle('locate', async (id) => {
     const r = await dialog.showOpenDialog(win, {
-      title: String(id) === 'wow64' ? 'Select the 64-bit client folder (the one with soder-nextgen-mmo)' : 'Select the folder where the game is installed (the one with Wow.exe)',
+      title: String(id) === 'wow64' ? `Select the 64-bit client folder (the one with ${controller.config.client('wow64').executable})` : 'Select the folder where the game is installed (the one with Wow.exe)',
       properties: ['openDirectory']
     })
     if (r.canceled || !r.filePaths[0]) return null
