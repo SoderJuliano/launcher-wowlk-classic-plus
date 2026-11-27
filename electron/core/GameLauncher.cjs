@@ -446,11 +446,49 @@ class GameLauncher {
   }
 
   /** @returns {Promise<{ pid: number, command: string }>} */
-  async launch(id, { onExit, onStatus, credentials } = {}) {
+  /**
+   * 64-bit client (soder-nextgen): a native program on every platform (no Wine, no realmlist.wtf,
+   * no digita/SoderPad, which are for the 3.3.5a Wow.exe). Its only way in is the handoff line on
+   * stdin (gameHandoff.cjs); the release build closes without it.
+   */
+  async #launchNative(id, client, { onExit, handoff } = {}) {
+    if (!handoff) throw new LauncherError('LAUNCH_FAILED', 'The 64-bit client must be opened with a game ticket.')
+    const dir = this.config.clientDir(id)
+    const exe = resolveInside(dir, client.executable)
+    if (this.platform !== 'win32') {
+      try { fs.chmodSync(exe, fs.statSync(exe).mode | 0o755) } catch {}
+    }
+    const env = platform.cleanEnvForSystemBinary ? platform.cleanEnvForSystemBinary({ ...process.env }) : { ...process.env }
+    log.info(`launching ${id} (native, launcher handoff): ${exe}`)
+    const child = await new Promise((resolve, reject) => {
+      let proc
+      try {
+        proc = this.spawn(exe, [], { cwd: path.dirname(exe), env, detached: true, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: false })
+      } catch (err) {
+        return reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`))
+      }
+      proc.once('error', (err) => reject(new LauncherError('LAUNCH_FAILED', `Could not start the game: ${err.message}`)))
+      proc.once('spawn', () => resolve(proc))
+    })
+    // The ticket only travels through this pipe (never argv/env, which other processes can read).
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(JSON.stringify(handoff) + '\n')
+    this.running.set(id, child)
+    child.once('exit', (code) => {
+      this.running.delete(id)
+      log.info(`${id} exited with code ${code}`)
+      onExit?.(code)
+    })
+    child.unref()
+    return { pid: child.pid, command: path.basename(exe) }
+  }
+
+  async launch(id, { onExit, onStatus, credentials, handoff } = {}) {
     if (this.running.has(id)) throw new LauncherError('ALREADY_RUNNING', 'The game is already running.')
     const client = this.config.client(id)
     const v = this.installer.verify(id)
     if (!v.installed) throw new LauncherError('NOT_INSTALLED', v.missing.length ? `Installation is incomplete (${v.missing.join(', ')}). Use Repair.` : 'The game is not installed.')
+    if (client.architecture === 'x64') return this.#launchNative(id, client, { onExit, handoff })
     this.installer.ensureRealmlist(id, credentials?.username, credentials?.password)
 
     const dir = this.config.clientDir(id)

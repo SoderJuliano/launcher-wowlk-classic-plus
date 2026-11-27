@@ -13,6 +13,7 @@ const { LauncherError, toPlain } = require('./errors.cjs')
 const platform = require('./PlatformService.cjs')
 const { shouldEnableFilters } = require('./GraphicsManager.cjs')
 const log = require('./logger.cjs')
+const { buildHandoff } = require('./gameHandoff.cjs')
 
 class LauncherController {
   constructor({ config, api, auth, manifests, downloader, installer, updater, supporterContent, languagePack, game, selfUpdater, emit }) {
@@ -570,7 +571,7 @@ class LauncherController {
         }
       }
       const lang = this.config.get().gameLanguage || 'enUS'
-      if (lang !== 'enUS' && this.languagePack) {
+      if (lang !== 'enUS' && this.languagePack && !native) {
         if (supporterOn) this.supporterContent.activate(id)
         const lm = await this.refreshLanguageManifest(id, lang)
         if (lm) {
@@ -636,7 +637,8 @@ class LauncherController {
       try { this.languagePack?.deactivate(id) } catch {}
       await this.syncSupporterContent(id)
     }
-    if (platform.platform !== 'win32' && (!this.wine || !this.wine.found)) {
+    const native = this.config.client(id).architecture === 'x64'
+    if (!native && platform.platform !== 'win32' && (!this.wine || !this.wine.found)) {
       log.info(`Wine missing on ${platform.platform}; auto-installing wine runtime fallback before launching...`)
       await this.installWine()
     }
@@ -652,7 +654,7 @@ class LauncherController {
       else this.supporterContent?.deactivate(id)
 
       let languageWarning = null
-      if (lang !== 'enUS' && this.languagePack) {
+      if (lang !== 'enUS' && this.languagePack && !native) {
         const lm = (await this.refreshLanguageManifest(id, lang)) ?? this.languageManifestCache[`${id}:${lang}`]?.manifest
         if (lm) {
           const activeLang = this.languagePack.readActive(id)
@@ -713,7 +715,8 @@ class LauncherController {
       await this.syncAccountLanguage(lang)
 
       const credentials = { username: this.auth.user?.username, password: this.auth.password }
-      const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials })
+      const handoff = native ? await this.#gameHandoff(id, credentials) : undefined
+      const r = await this.game.launch(id, { onExit: () => { this.#publish(); this.emit('game-exit') }, credentials, handoff })
       this.#publish()
       return languageWarning ? { ...r, languageWarning } : r
     } catch (err) {
@@ -721,6 +724,22 @@ class LauncherController {
       this.#publish()
       throw err
     }
+  }
+
+  /** Single-use ticket from the API + the account, for the 64-bit client's stdin (gameHandoff.cjs). */
+  async #gameHandoff(id, credentials) {
+    if (!credentials.username || !credentials.password) {
+      throw new LauncherError('RELOGIN_REQUIRED', 'Log in again in the launcher to open the 64-bit client.')
+    }
+    const token = await this.auth.accessToken()
+    const res = await this.api.request('POST', '/game/ticket', { token, body: { client: id } })
+    return buildHandoff({
+      apiBase: await this.api.resolveBase(),
+      prefix: this.config.get().api.pathPrefix,
+      ticket: res?.ticket,
+      username: credentials.username,
+      password: credentials.password
+    })
   }
 
   async installWine() {
