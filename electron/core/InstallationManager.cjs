@@ -134,7 +134,9 @@ class InstallationManager {
     const statePath = path.join(r.dir, STATE_FILE)
     let state = null
     try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch { /* first adoption */ }
-    const realm = applyRealmlist(r.dir, cfg.realmlist, r.locale, undefined, undefined, this.#videoOptions(cfg))
+    // The 64-bit client gets its server from the signed handshake, not from realmlist.wtf.
+    const native = this.config.client(id).architecture === 'x64'
+    const realm = native ? { locale: r.locale } : applyRealmlist(r.dir, cfg.realmlist, r.locale, undefined, undefined, this.#videoOptions(cfg))
     state = {
       client: id,
       architecture: this.config.client(id).architecture,
@@ -245,6 +247,7 @@ class InstallationManager {
 
   /** Re-applies the realmlist (called before every launch so config changes propagate). */
   ensureRealmlist(id, accountName, password) {
+    if (this.config.client(id).architecture === 'x64') return null // 64-bit: server comes from the signed handshake
     const cfg = this.config.get()
     const dir = this.config.clientDir(id)
     const state = this.readState(id)

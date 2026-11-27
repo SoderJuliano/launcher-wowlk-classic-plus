@@ -64,3 +64,25 @@ test('the 32-bit client is not affected by 64-bit early access', async () => {
   assert.equal(ctl.clientState('wow32').earlyAccess, false)
   assert.equal(ctl.snapshot().earlyAccess64.member, true)
 })
+
+test('locating the 64-bit folder adopts it without writing realmlist.wtf', async () => {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const { ctl } = setup({ value: true })
+  await ctl.refreshSupporter() // member + toggle on = available
+  const dir = tmpDir('soder64-')
+  fs.writeFileSync(path.join(dir, 'soder-nextgen-mmo'), '#!/bin/sh\n')
+  const st = await ctl.locate('wow64', dir)
+  assert.equal(st.installed, true)
+  assert.equal(st.button, 'PLAY')
+  assert.equal(fs.existsSync(path.join(dir, 'Data')), false)
+  assert.equal(fs.existsSync(path.join(dir, 'realmlist.wtf')), false)
+  await assert.rejects(ctl.locate('wow64', tmpDir('vazia-')), { code: 'NOT_A_GAME_FOLDER' })
+})
+
+test('a 32-bit supporter never gets the 32-bit overlay applied to the 64-bit client', async () => {
+  const { ctl } = setup({ value: true })
+  ctl.supporter = { supporter: true }
+  await ctl.refreshEarlyAccess64()
+  assert.equal(ctl.clientState('wow64').supporterUpdateAvailable, false)
+})

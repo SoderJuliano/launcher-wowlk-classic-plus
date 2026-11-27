@@ -236,7 +236,7 @@ function registerIpc() {
   })
   handle('locate', async (id) => {
     const r = await dialog.showOpenDialog(win, {
-      title: 'Select the folder where the game is installed (the one with Wow.exe)',
+      title: String(id) === 'wow64' ? 'Select the 64-bit client folder (the one with soder-nextgen-mmo)' : 'Select the folder where the game is installed (the one with Wow.exe)',
       properties: ['openDirectory']
     })
     if (r.canceled || !r.filePaths[0]) return null

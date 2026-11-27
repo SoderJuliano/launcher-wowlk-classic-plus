@@ -126,7 +126,7 @@ class LauncherController {
     const v = this.installer.verify(id)
     const m = this.manifestCache[id]?.manifest
     const updateAvailable = !!(v.installed && m && v.state?.version !== m.version)
-    const supporterEnabled = !!(c.supporterContentEnabled && this.supporter?.supporter)
+    const supporterEnabled = !!(c.supporterContentEnabled && !c.earlyAccess && this.supporter?.supporter)
     const sm = this.supporterManifestCache[id]?.manifest
     const sState = this.supporterContent?.readState(id) || null
     const supporterActive = this.supporterContent?.isActive(id) || false
@@ -493,7 +493,7 @@ class LauncherController {
       return { language: lang, applied: 0, serverSynced, pendingInstall: !st.installed }
     }
 
-    const supporterOn = !!(this.config.client(selectedId).supporterContentEnabled && this.supporter?.supporter)
+    const supporterOn = !!(this.config.client(selectedId).supporterContentEnabled && !this.config.client(selectedId).earlyAccess && this.supporter?.supporter)
     if (supporterOn && !this.supporterContent?.isActive(selectedId)) {
       try { this.languagePack.deactivate(selectedId) } catch {}
       try { this.supporterContent?.activate(selectedId) } catch {}
@@ -635,7 +635,7 @@ class LauncherController {
       this.manifestCache[id] = { manifest: m, fetchedAt: Date.now() }
       await this.#update(id, m, signal, { ignoreCache: repair })
       this.installer.ensureRealmlist(id)
-      const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter && this.supporterContent)
+      const supporterOn = !!(this.config.client(id).supporterContentEnabled && !this.config.client(id).earlyAccess && this.supporter?.supporter && this.supporterContent)
       if (supporterOn) {
         const sm = this.supporterManifestCache[id]?.manifest ?? (await this.manifests.fetchSupporterManifest(id))
         if (sm) {
@@ -679,7 +679,7 @@ class LauncherController {
       }
       log.warn(`pre-launch manifest check for ${id} failed (continuing with cache)`, toPlain(err))
     }
-    const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter)
+    const supporterOn = !!(this.config.client(id).supporterContentEnabled && !this.config.client(id).earlyAccess && this.supporter?.supporter)
     if (supporterOn && this.manifests.fetchSupporterManifest) {
       try {
         const sm = await this.manifests.fetchSupporterManifest(id)
@@ -703,7 +703,7 @@ class LauncherController {
       log.info(`update required before play for ${id} (${state.version || 'base'} -> ${state.latestVersion})`)
       return this.update(id)
     }
-    const supporterOn = !!(this.config.client(id).supporterContentEnabled && this.supporter?.supporter)
+    const supporterOn = !!(this.config.client(id).supporterContentEnabled && !this.config.client(id).earlyAccess && this.supporter?.supporter)
     if (supporterOn && state.supporterUpdateAvailable) {
       log.info(`supporter content update required before play for ${id} (${state.supporterVersion || 'none'} -> ${state.supporterLatestVersion})`)
       // Always deactivate language overlay before updating supporter base files

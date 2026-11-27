@@ -116,8 +116,10 @@ const showVulkanWarn = computed(() => {
   if (!vk || vk.supported) return false
   return snap.value?.settings?.graphicsUseDxvk !== false
 })
+/** Wine, NTsync and Steam Deck tips are for the 32-bit (Wow.exe through Wine); the 64-bit is native and not made for the Deck yet. */
+const usesWine = computed(() => !!(snap.value?.wine?.needed && client.value?.architecture !== 'x64'))
 const showNtsyncTip = computed(() => {
-  if (dismissedNtsync.value) return false
+  if (dismissedNtsync.value || !usesWine.value) return false
   const lp = snap.value?.linuxPerf
   return !!(lp?.platform === 'linux' && lp.ntsync?.moduleAvailable && !lp.ntsync?.loaded)
 })
@@ -283,8 +285,8 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
         <dl class="hero__facts">
           <div><dt>Client</dt><dd>{{ client.name }}</dd></div>
           <div><dt>Realm</dt><dd>{{ snap.settings.realmlist }}</dd></div>
-          <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="snap.wine?.needed"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
-          <div v-if="snap.wine?.needed"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
+          <div><dt>Platform</dt><dd>{{ snap.platform.label }}<template v-if="usesWine"> · Wine {{ snap.wine.found ? snap.wine.version || 'found' : 'not found' }}</template></dd></div>
+          <div v-if="usesWine"><dt>Steam Deck</dt><dd>Teclado: <b>STEAM + X</b></dd></div>
         </dl>
         <div class="hero__sup-row">
           <button
@@ -392,7 +394,7 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
             </div>
           </div>
         </div>
-        <div v-if="snap.wine?.needed && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
+        <div v-if="usesWine && !snap.wine.found" class="alert alert--warn hero__warn wine-alert">
           <Icon name="alert" :size="16" />
           <div class="wine-alert__content">
             <p><strong>Compatibilidade Linux / Steam Deck:</strong> O Wine é necessário para executar o jogo.</p>
@@ -426,7 +428,7 @@ const ARCH = { x86: '32-bit', x64: '64-bit' }
 
         <div class="bar__actions">
           <button v-if="busy" type="button" class="btn btn--danger" @click="run('cancel')" @pointerup.stop.prevent="run('cancel')"><Icon name="stop" /> Cancel</button>
-          <button v-else-if="client.available && !client.installed && !client.earlyAccess" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate game</button>
+          <button v-else-if="client.available && !client.installed" type="button" class="btn btn--ghost" title="Already have the game? Select its folder" @click="locate" @pointerup.stop.prevent="locate"><Icon name="folder" /> Locate game</button>
           <button v-else-if="client.installed && client.available && client.latestVersion" type="button" class="btn btn--ghost" title="Check and repair game files" @click="run('repair', client.id)" @pointerup.stop.prevent="run('repair', client.id)"><Icon name="wrench" /> Repair</button>
           <button
             type="button" class="main" :class="{ 'main--busy': btn.busy, 'main--err': btn.error, 'main--play': client.button === 'PLAY' }"

@@ -3,6 +3,7 @@
  * Never bundled in production (guarded by import.meta.env.DEV in main.js).
  * ?view=login | home | installing | error  picks the scenario.
  * &client=wow64 selects the 64-bit tab; &sup=0 = not a 32-bit supporter;
+ * &wine=ok|missing simulates Linux/Steam Deck.
  * &ea=none | off | on = 64-bit early access (none = not in wowsixtyfordev, off/on = member with the toggle).
  */
 export function installMockBridge() {
@@ -20,7 +21,7 @@ export function installMockBridge() {
   })
   const snap = {
     platform: { platform: 'win32', arch: 'x64', label: 'Windows' },
-    wine: { needed: false, found: true },
+    wine: q.get('wine') ? { needed: true, found: q.get('wine') === 'ok', version: 'wine-10.0' } : { needed: false, found: true },
     vulkan: { platform: 'win32', supported: true, missingReasons: [], installCommand: null, docsUrl: 'https://vulkan.lunarg.com/sdk/home', driverLinks: [] },
     launcherUpdateError: null,
     api: view === 'login' ? { state: 'incompatible', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', error: 'Server is online but the launcher API (/launcher/v1) is not available yet.' } : { state: 'online', baseUrl: 'https://bush-wifi-wanting.ngrok-free.dev', apiVersion: 1 },
