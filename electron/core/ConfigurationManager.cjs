@@ -45,7 +45,9 @@ class ConfigurationManager {
     if (!c) throw new LauncherError('UNKNOWN_CLIENT', `Unknown client: ${id}`)
     // Native clients ship a different file name per OS (wow64: soder-nextgen-mmo / .exe).
     const exe = this.platform === 'win32' && c.executableWin32 ? c.executableWin32 : c.executable
-    return { id, ...c, executable: exe }
+    // ... and a different update manifest per OS (wow64 = Linux build, wow64win = Windows build).
+    const manifestId = this.platform === 'win32' && c.manifestIdWin32 ? c.manifestIdWin32 : id
+    return { id, ...c, executable: exe, manifestId }
   }
 
   /** Install folder of a client: an adopted existing folder (clients.<id>.path) or <installDir>/<id>. */

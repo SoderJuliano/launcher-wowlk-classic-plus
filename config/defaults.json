@@ -43,6 +43,7 @@
       "earlyAccess": true,
       "executable": "soder-nextgen-mmo",
       "executableWin32": "soder-nextgen-mmo.exe",
+      "manifestIdWin32": "wow64win",
       "packageRoot": "",
       "basePackage": {
         "url": "",

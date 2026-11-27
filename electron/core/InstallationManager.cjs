@@ -205,7 +205,8 @@ class InstallationManager {
       const missing = [...this.requiredFiles(id, locale || cfg.locale), client.executable].filter((rel) => !fs.existsSync(resolveInside(staging, rel)))
       if (missing.length) throw new LauncherError('INSTALL_INVALID', `The game package is incomplete. Missing: ${missing.join(', ')}`)
 
-      const realm = applyRealmlist(staging, cfg.realmlist, cfg.locale, undefined, undefined, this.#videoOptions(cfg))
+      // 64-bit: no realmlist.wtf (the server comes from the signed handshake).
+      const realm = client.architecture === 'x64' ? { locale: locale || cfg.locale } : applyRealmlist(staging, cfg.realmlist, cfg.locale, undefined, undefined, this.#videoOptions(cfg))
 
       // Reinstall: keep the player's own data.
       if (fs.existsSync(finalDir)) {

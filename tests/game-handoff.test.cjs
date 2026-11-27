@@ -83,3 +83,21 @@ test('Windows: the 64-bit client is soder-nextgen-mmo.exe, started directly with
   assert.equal(calls[0].cmd, path.join(dir, 'soder-nextgen-mmo.exe'))
   assert.equal(calls[0].opts.stdio[0], 'pipe')
 })
+
+test('the 64-bit manifest is per OS: wow64 on Linux, wow64win on Windows', async () => {
+  const path = require('node:path')
+  const { ConfigurationManager } = require('../electron/core/ConfigurationManager.cjs')
+  const { ManifestService } = require('../electron/core/ManifestService.cjs')
+  const mk = (platformName) => new ConfigurationManager({ defaultsFile: path.join(__dirname, '..', 'config', 'defaults.json'), dataDir: tmpDir(), platformName })
+  for (const [plat, expected] of [['linux', '/manifest/wow64'], ['win32', '/manifest/wow64win']]) {
+    const asked = []
+    const api = { lastStatus: { state: 'online' }, request: async (m, p) => { asked.push(p); return { schema_version: 1, client: 'wow64', architecture: 'x64', version: '0.1.0', files: [] } } }
+    const ms = new ManifestService({ api, auth: { isAuthenticated: () => false }, launcherVersion: '0.1.55', config: mk(plat) })
+    const m = await ms.fetch('wow64')
+    assert.equal(asked[0], expected)
+    assert.equal(m.client, 'wow64')
+    const api32 = { lastStatus: { state: 'online' }, request: async (m, p) => { asked.push(p); return { schema_version: 1, client: 'wow32', architecture: 'x86', version: '1.0.0', files: [] } } }
+    await new ManifestService({ api: api32, auth: { isAuthenticated: () => false }, launcherVersion: '0.1.55', config: mk(plat) }).fetch('wow32')
+    assert.equal(asked[1], '/manifest/wow32') // the 32-bit keeps its single manifest
+  }
+})

@@ -94,7 +94,8 @@ class ManifestService {
     let raw
     if (apiOnline || !staticUrl) {
       const token = this.auth.isAuthenticated() || this.auth.session ? await this.auth.accessToken() : undefined
-      raw = await this.api.request('GET', `/manifest/${encodeURIComponent(clientId)}`, { token })
+      const manifestId = this.config?.client(clientId).manifestId || clientId
+      raw = await this.api.request('GET', `/manifest/${encodeURIComponent(manifestId)}`, { token })
     } else {
       raw = await this.#fetchStatic(staticUrl)
     }
